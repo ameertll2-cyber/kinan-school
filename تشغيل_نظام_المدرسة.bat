@@ -4,6 +4,7 @@ title نظام كِنان لإدارة المدرسة
 cd /d "%~dp0"
 
 set "PHP_EXE="
+if exist "%~dp0runtime\php\php.exe" set "PHP_EXE=%~dp0runtime\php\php.exe"
 where php.exe >nul 2>&1 && for /f "delims=" %%I in ('where php.exe') do if not defined PHP_EXE set "PHP_EXE=%%I"
 if not defined PHP_EXE (
   for /d %%D in ("%LocalAppData%\Microsoft\WinGet\Packages\PHP.PHP.NTS.8.4_*") do if exist "%%D\php.exe" set "PHP_EXE=%%D\php.exe"
@@ -30,6 +31,16 @@ set "IP=%IP: =%"
 if not defined IP set "IP=127.0.0.1"
 set "URL=http://%IP%:8080"
 for %%I in ("%PHP_EXE%") do set "PHP_DIR=%%~dpI"
+
+netstat -ano | findstr /R /C:"127.0.0.1:8080" /C:"0.0.0.0:8080" >nul 2>&1
+if not errorlevel 1 (
+  echo المنفذ 8080 مستخدم حاليًا. أغلق البرنامج الذي يشغله ثم أعد تشغيل كِنان.
+  start "" "http://localhost:8080"
+  pause
+  exit /b 1
+)
+
+netsh advfirewall firewall add rule name="Kinan School Local HTTP 8080" dir=in action=allow protocol=TCP localport=8080 profile=private >nul 2>&1
 
 (
   echo ^<!doctype html^>

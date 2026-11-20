@@ -14,6 +14,7 @@ form { display:grid; gap:16px }
 .btn.primary { background:var(--primary);color:#fff }.btn.primary:hover { background:var(--primary-dark) }.btn.warning { background:var(--warning);color:#fff }
 .demo-hint { margin-top:18px;color:var(--muted);font-size:13px }
 .alert { border-radius:9px;padding:11px 14px;margin:12px 0 }.alert.error { background:#fdeaea;color:#9f2525 }.alert.success { background:#e7f6ed;color:#17643d }
+.alert.warning { background:#fff2dc;color:#94620d }
 .sidebar { position:fixed;inset:0 0 0 auto;width:250px;background:#fff;border-left:1px solid var(--border);padding:18px;display:flex;flex-direction:column;z-index:20 }
 .brand { display:flex;align-items:center;gap:10px;font-size:22px;font-weight:850;height:52px }
 .sidebar nav { display:grid;gap:5px;margin-top:18px }

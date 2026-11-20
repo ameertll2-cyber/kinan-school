@@ -4,3 +4,4 @@ kinan_school.db-wal
 kinan_school.restore.db
 data/google-drive.json
 *.log
+runtime/

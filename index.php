@@ -128,7 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'login') {
         $loginUsername=trim((string)$_POST['username']);
         $ip=$_SERVER['REMOTE_ADDR'] ?? '';
-        $stmt = $pdo->prepare('SELECT id,name,username,role,active,failed_attempts,locked_until,password_hash FROM users WHERE username = ?');
+        $stmt = $pdo->prepare('SELECT id,name,username,role,active,failed_attempts,locked_until,password_hash,password_changed_at FROM users WHERE username = ?');
         $stmt->execute([$loginUsername]);
         $user = $stmt->fetch();
         $locked=$user && !empty($user['locked_until']) && strtotime((string)$user['locked_until'])>time();
@@ -144,6 +144,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ->execute([$loginUsername,$ip]);
             session_regenerate_id(true);
             $_SESSION['user'] = $user;
+            if (empty($user['password_changed_at'])) {
+                $_SESSION['force_password_change'] = true;
+                header('Location: ?page=password&force=1');
+                exit;
+            }
             header('Location: ?page=dashboard');
             exit;
         } else {
@@ -195,6 +200,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare('UPDATE users SET password_hash=?,password_changed_at=?,failed_attempts=0,locked_until=NULL WHERE id=?')
                     ->execute([password_hash($new,PASSWORD_DEFAULT),date('Y-m-d H:i:s'),(int)$user['id']]);
                 auditLog($pdo,$user,'تغيير كلمة المرور','الحساب',(string)$user['id'],'تم تغيير كلمة المرور من قبل المستخدم');
+                unset($_SESSION['force_password_change']);
                 $message='تم تغيير كلمة المرور بنجاح';
             }
         } elseif (in_array($action, $securityActions, true) && !canManage($user)) {
@@ -1446,6 +1452,9 @@ if ($page === 'login' && $error === '') {
         <?php elseif ($page === 'password'): ?>
             <div class="panel">
                 <h2>تغيير كلمة المرور</h2>
+                <?php if (!empty($_SESSION['force_password_change']) || isset($_GET['force'])): ?>
+                    <div class="alert warning">هذا حساب تجريبي أو لم تغيّر كلمة المرور بعد. يجب تعيين كلمة مرور جديدة قبل متابعة العمل.</div>
+                <?php endif ?>
                 <form method="post" class="form-grid">
                     <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>">
                     <input type="hidden" name="action" value="password_change">
