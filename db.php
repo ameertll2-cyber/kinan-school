@@ -1,0 +1,139 @@
+<?php
+declare(strict_types=1);
+
+function db(): PDO {
+    static $pdo = null;
+    if ($pdo instanceof PDO) {
+        return $pdo;
+    }
+
+    $dbFile = __DIR__ . DIRECTORY_SEPARATOR . 'kinan_school.db';
+    $pdo = new PDO('sqlite:' . $dbFile);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+    $pdo->exec('PRAGMA foreign_keys = ON');
+    $pdo->exec('PRAGMA journal_mode = WAL');
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('مدير','معاون','مدرس','محاسب','ولي أمر')),
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            national_id TEXT,
+            class_id INTEGER,
+            guardian_name TEXT,
+            guardian_phone TEXT,
+            address TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS staff (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            job_title TEXT NOT NULL,
+            phone TEXT,
+            email TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS classes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            section TEXT NOT NULL DEFAULT 'أ',
+            academic_year TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS subjects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            code TEXT,
+            class_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS attendance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('حاضر','غائب','متأخر','غياب بعذر')),
+            note TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(student_id, date)
+        );
+        CREATE TABLE IF NOT EXISTS grades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            subject_id INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            score REAL NOT NULL,
+            max_score REAL NOT NULL DEFAULT 100,
+            date TEXT NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+    ");
+
+    seedDemoData($pdo);
+    return $pdo;
+}
+
+function seedDemoData(PDO $pdo): void {
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
+    if ($count === 0) {
+        $users = [
+            ['مدير النظام', 'admin', '123456', 'مدير'],
+            ['نورا المعاون', 'assistant', '123456', 'معاون'],
+            ['أحمد المدرس', 'teacher', '123456', 'مدرس'],
+            ['سارة المحاسبة', 'accountant', '123456', 'محاسب'],
+            ['ولي الطالب', 'parent', '123456', 'ولي أمر'],
+        ];
+        $stmt = $pdo->prepare('INSERT INTO users (name, username, password_hash, role) VALUES (?, ?, ?, ?)');
+        foreach ($users as $user) {
+            $stmt->execute([$user[0], $user[1], password_hash($user[2], PASSWORD_DEFAULT), $user[3]]);
+        }
+    }
+
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM classes")->fetchColumn();
+    if ($count === 0) {
+        $pdo->exec("INSERT INTO classes (name, stage, section, academic_year) VALUES
+            ('الصف الخامس', 'ابتدائي', 'أ', '2026-2027'),
+            ('الصف السادس', 'ابتدائي', 'ب', '2026-2027'),
+            ('الصف الأول متوسط', 'متوسط', 'أ', '2026-2027')");
+    }
+
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM subjects")->fetchColumn();
+    if ($count === 0) {
+        $pdo->exec("INSERT INTO subjects (name, code, class_id) VALUES
+            ('اللغة العربية', 'AR101', 1),
+            ('الرياضيات', 'MA101', 1),
+            ('العلوم', 'SC101', 1),
+            ('التربية الإسلامية', 'IS101', 1)");
+    }
+
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM students")->fetchColumn();
+    if ($count === 0) {
+        $pdo->exec("INSERT INTO students (full_name, national_id, class_id, guardian_name, guardian_phone, address) VALUES
+            ('يوسف محمد علي', '1001001001', 1, 'محمد علي', '07700000001', 'بغداد'),
+            ('مريم أحمد حسن', '1001001002', 1, 'أحمد حسن', '07700000002', 'بغداد'),
+            ('علي خالد سالم', '1001001003', 2, 'خالد سالم', '07700000003', 'النجف')");
+    }
+
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM staff")->fetchColumn();
+    if ($count === 0) {
+        $pdo->exec("INSERT INTO staff (full_name, job_title, phone, email) VALUES
+            ('أحمد محمود', 'مدرس رياضيات', '07700000101', 'ahmad@example.edu.iq'),
+            ('نورا سامي', 'مديرة شعبة', '07700000102', 'nora@example.edu.iq')");
+    }
+}
