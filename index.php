@@ -632,6 +632,20 @@ if ($page === 'login' || (!$user && $page !== 'login')) {
     $page = 'login';
 }
 
+$adminOnlyPages = ['students','staff','classes','subjects','parents','curriculum','correspondence','office','security','backup'];
+if ($user && in_array($page, $adminOnlyPages, true) && !canManage($user)) {
+    http_response_code(403);
+    exit('ليست لديك صلاحية الوصول إلى هذه الصفحة');
+}
+if ($user && $page === 'accounting' && !canAccounting($user)) {
+    http_response_code(403);
+    exit('ليست لديك صلاحية الوصول إلى المحاسبة');
+}
+if ($user && $page === 'counseling' && !canCounsel($user)) {
+    http_response_code(403);
+    exit('ليست لديك صلاحية الوصول إلى الإرشاد التربوي');
+}
+
 function e(string $value): string {
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
 }
