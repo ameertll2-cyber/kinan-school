@@ -39,3 +39,7 @@ function canManage(array $user): bool {
 function canAccounting(array $user): bool {
     return in_array($user['role'], ['مدير', 'معاون', 'محاسب'], true);
 }
+
+function canCounsel(array $user): bool {
+    return in_array($user['role'], ['مدير', 'معاون', 'مدرس'], true);
+}

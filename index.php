@@ -112,13 +112,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $accountingActions = ['fee_type_save','invoice_save','payment_save','expense_save'];
         $teacherActions = ['assignment_save','lecture_save'];
+        $counselingActions = ['counseling_case_save','behavior_note_save','improvement_plan_save','counseling_session_save'];
         if (!canManage($user) && $action !== 'attendance_save' && $action !== 'grade_save'
             && $action !== 'notification_read'
             && !in_array($action, $accountingActions, true)
-            && !in_array($action, $teacherActions, true)) {
+            && !in_array($action, $teacherActions, true)
+            && !in_array($action, $counselingActions, true)) {
             $error = 'ليست لديك صلاحية تنفيذ هذا الإجراء';
         } elseif (in_array($action, $accountingActions, true) && !canAccounting($user)) {
             $error = 'ليست لديك صلاحية تنفيذ الإجراء المحاسبي';
+        } elseif (in_array($action, $counselingActions, true) && !canCounsel($user)) {
+            $error = 'ليست لديك صلاحية تنفيذ الإجراء التربوي';
         } elseif ($action === 'student_save') {
             $pdo->prepare('INSERT INTO students (full_name,national_id,class_id,guardian_name,guardian_phone,address,birth_date,gender,enrollment_number) VALUES (?,?,?,?,?,?,?,?,?)')
                 ->execute([trim((string)$_POST['full_name']), trim((string)$_POST['national_id']), (int)$_POST['class_id'], trim((string)$_POST['guardian_name']), trim((string)$_POST['guardian_phone']), trim((string)$_POST['address']), trim((string)$_POST['birth_date']), trim((string)$_POST['gender']), trim((string)$_POST['enrollment_number'])]);
@@ -389,6 +393,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error = 'تعذر إتمام الاستيراد';
                 }
         }
+        } elseif ($action === 'counseling_case_save') {
+            $studentId=(int)$_POST['student_id'];
+            if (!$studentId || trim((string)$_POST['category'])==='') {
+                $error='اختر الطالب وحدد فئة الحالة';
+            } else {
+                $pdo->prepare('INSERT INTO counseling_cases (student_id,category,priority,status,summary,opened_at,created_by) VALUES (?,?,?,?,?,?,?)')
+                    ->execute([$studentId,trim((string)$_POST['category']),trim((string)$_POST['priority']),trim((string)$_POST['status']),trim((string)$_POST['summary']),trim((string)$_POST['opened_at']), (int)$user['id']]);
+                $message='تمت إضافة حالة الإرشاد';
+            }
+        } elseif ($action === 'behavior_note_save') {
+            $studentId=(int)$_POST['student_id'];
+            $description=trim((string)$_POST['description']);
+            if (!$studentId || $description==='') {
+                $error='اختر الطالب وأدخل وصف الملاحظة';
+            } else {
+                $pdo->prepare('INSERT INTO behavior_notes (student_id,incident_date,behavior_type,category,description,action_taken,notify_parent,created_by) VALUES (?,?,?,?,?,?,?,?)')
+                    ->execute([$studentId,trim((string)$_POST['incident_date']),trim((string)$_POST['behavior_type']),trim((string)$_POST['category']),$description,trim((string)$_POST['action_taken']),isset($_POST['notify_parent'])?1:0,(int)$user['id']]);
+                if (isset($_POST['notify_parent'])) {
+                    $student=$pdo->query("SELECT full_name FROM students WHERE id=$studentId")->fetchColumn();
+                    $pdo->prepare('INSERT INTO notifications (title,body,audience,student_id,created_by) VALUES (?,?,?,?,?)')
+                        ->execute(['ملاحظة تربوية عن الطالب',(string)$student.': '.$description,'طالب محدد',$studentId,(int)$user['id']]);
+                }
+                $message='تمت إضافة الملاحظة السلوكية';
+            }
+        } elseif ($action === 'improvement_plan_save') {
+            $studentId=(int)$_POST['student_id'];
+            if (!$studentId || trim((string)$_POST['title'])===''||trim((string)$_POST['goals'])==='') {
+                $error='أدخل بيانات الخطة وأهدافها';
+            } else {
+                $pdo->prepare('INSERT INTO improvement_plans (student_id,title,goals,interventions,responsible_person,start_date,review_date,status,progress,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)')
+                    ->execute([$studentId,trim((string)$_POST['title']),trim((string)$_POST['goals']),trim((string)$_POST['interventions']),trim((string)$_POST['responsible_person']),trim((string)$_POST['start_date']),trim((string)$_POST['review_date']),trim((string)$_POST['status']),trim((string)$_POST['progress']), (int)$user['id']]);
+                $message='تمت إضافة خطة التحسين';
+            }
+        } elseif ($action === 'counseling_session_save') {
+            $studentId=(int)$_POST['student_id'];
+            if (!$studentId || trim((string)$_POST['session_date'])==='') {
+                $error='اختر الطالب وتاريخ الجلسة';
+            } else {
+                $pdo->prepare('INSERT INTO counseling_sessions (student_id,case_id,session_date,session_type,summary,recommendations,follow_up_date,follow_up_status,created_by) VALUES (?,?,?,?,?,?,?,?,?)')
+                    ->execute([$studentId,(int)($_POST['case_id'] ?: 0) ?: null,trim((string)$_POST['session_date']),trim((string)$_POST['session_type']),trim((string)$_POST['summary']),trim((string)$_POST['recommendations']),trim((string)$_POST['follow_up_date']),trim((string)$_POST['follow_up_status']), (int)$user['id']]);
+                $message='تمت إضافة جلسة الإرشاد والمتابعة';
+            }
         } elseif ($action === 'backup_export') {
             $password = (string)$_POST['backup_password'];
             if (strlen($password) < 8) {
@@ -553,6 +599,9 @@ if ($page === 'login' && $error === '') {
                 <a class="<?= $page==='correspondence'?'active':'' ?>" href="?page=correspondence"><span>✉</span> المراسلات الإدارية</a>
                 <a class="<?= $page==='office'?'active':'' ?>" href="?page=office"><span>⇄</span> Word وExcel والسجلات</a>
             <?php endif ?>
+            <?php if (canCounsel($user)): ?>
+                <a class="<?= $page==='counseling'?'active':'' ?>" href="?page=counseling"><span>♥</span> الإرشاد التربوي</a>
+            <?php endif ?>
             <a class="<?= $page==='learning'?'active':'' ?>" href="?page=learning"><span>▶</span> المحاضرات والواجبات</a>
             <?php if ($user['role'] === 'ولي أمر'): ?>
                 <a class="<?= $page==='parent_portal'?'active':'' ?>" href="?page=parent_portal"><span>⌂</span> بوابة ولي الأمر</a>
@@ -578,7 +627,7 @@ if ($page === 'login' && $error === '') {
                     'classes'=>'الصفوف والشعب','subjects'=>'المواد الدراسية','attendance'=>'الحضور والغياب',
                     'grades'=>'سجل الدرجات','backup'=>'النسخ الاحتياطية','accounting'=>'المحاسبة والرسوم',
                     'parents'=>'أولياء الأمور والإشعارات','parent_portal'=>'بوابة ولي الأمر','notifications'=>'الإشعارات',
-                    'curriculum'=>'المناهج والكتب والنماذج','learning'=>'المحاضرات والواجبات','correspondence'=>'المراسلات الإدارية','office'=>'التداول مع Word وExcel'
+                    'curriculum'=>'المناهج والكتب والنماذج','learning'=>'المحاضرات والواجبات','correspondence'=>'المراسلات الإدارية','office'=>'التداول مع Word وExcel','counseling'=>'الإرشاد التربوي والسلوك'
                ][$page] ?? 'كِنان') ?></h1>
             </div>
         </header>
@@ -1062,6 +1111,92 @@ if ($page === 'login' && $error === '') {
                 <div class="table-wrap"><table><thead><tr><th>النوع والرقم</th><th>الموضوع والجهة</th><th>التاريخ</th><th>الحالة</th><th>المرفق</th></tr></thead><tbody>
                 <?php foreach($pdo->query('SELECT * FROM correspondence ORDER BY correspondence_date DESC,id DESC') as $row): ?>
                     <tr><td><?= e($row['correspondence_type'].' / '.$row['reference_number']) ?></td><td><?= e($row['subject'].' — '.$row['recipient']) ?></td><td><?= e($row['correspondence_date']) ?></td><td><?= e($row['status']) ?></td><td><?php if($row['attachment_path']): ?><a href="<?= e($row['attachment_path']) ?>" target="_blank">فتح</a><?php endif ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+            </div>
+        <?php elseif ($page === 'counseling' && canCounsel($user)): ?>
+            <div class="stat-grid">
+                <article class="stat-card"><span>الحالات المفتوحة</span><strong><?= (int)$pdo->query("SELECT COUNT(*) FROM counseling_cases WHERE status!='مغلقة'")->fetchColumn() ?></strong></article>
+                <article class="stat-card"><span>الملاحظات السلوكية</span><strong><?= (int)$pdo->query("SELECT COUNT(*) FROM behavior_notes")->fetchColumn() ?></strong></article>
+                <article class="stat-card"><span>خطط التحسين النشطة</span><strong><?= (int)$pdo->query("SELECT COUNT(*) FROM improvement_plans WHERE status!='مكتملة'")->fetchColumn() ?></strong></article>
+                <article class="stat-card"><span>جلسات المتابعة</span><strong><?= (int)$pdo->query("SELECT COUNT(*) FROM counseling_sessions")->fetchColumn() ?></strong></article>
+            </div>
+            <div class="counseling-grid">
+                <div class="panel">
+                    <details open>
+                        <summary>فتح حالة إرشاد تربوي</summary>
+                        <form method="post" class="form-grid">
+                            <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="counseling_case_save">
+                            <label>الطالب<select name="student_id" required><option value="">اختر الطالب</option><?php foreach($pdo->query('SELECT id,full_name FROM students WHERE active=1 ORDER BY full_name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option><?php endforeach ?></select></label>
+                            <label>فئة الحالة<select name="category"><option>أكاديمية</option><option>سلوكية</option><option>نفسيّة</option><option>اجتماعية</option><option>حضور وغياب</option><option>أسريّة</option></select></label>
+                            <label>الأولوية<select name="priority"><option>عالية</option><option>متوسط</option><option>منخفضة</option></select></label>
+                            <label>الحالة<select name="status"><option>مفتوحة</option><option>قيد المتابعة</option><option>مغلقة</option></select></label>
+                            <label>تاريخ الفتح<input name="opened_at" type="date" value="<?= date('Y-m-d') ?>" required></label>
+                            <label>ملخص الحالة<textarea name="summary" rows="3"></textarea></label>
+                            <button class="btn primary">حفظ الحالة</button>
+                        </form>
+                    </details>
+                </div>
+                <div class="panel">
+                    <details open>
+                        <summary>تسجيل سلوك أو موقف تربوي</summary>
+                        <form method="post" class="form-grid">
+                            <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="behavior_note_save">
+                            <label>الطالب<select name="student_id" required><option value="">اختر الطالب</option><?php foreach($pdo->query('SELECT id,full_name FROM students WHERE active=1 ORDER BY full_name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option><?php endforeach ?></select></label>
+                            <label>التاريخ<input name="incident_date" type="date" value="<?= date('Y-m-d') ?>" required></label>
+                            <label>نوع السلوك<select name="behavior_type"><option>إيجابي</option><option>سلبي</option><option>محايد</option></select></label>
+                            <label>الفئة<select name="category"><option>إنجاز ومشاركة</option><option>انضباط الصف</option><option>العلاقة بالزملاء</option><option>احترام القواعد</option><option>استعمال الأجهزة</option><option>غياب وتأخر</option><option>أخرى</option></select></label>
+                            <label>وصف الموقف<textarea name="description" rows="3" required></textarea></label>
+                            <label>الإجراء المتخذ<textarea name="action_taken" rows="2"></textarea></label>
+                            <label class="check-line"><input type="checkbox" name="notify_parent"><span>إشعار ولي الأمر بالملاحظة</span></label>
+                            <button class="btn primary">حفظ الملاحظة</button>
+                        </form>
+                    </details>
+                </div>
+                <div class="panel">
+                    <details open>
+                        <summary>خطة تحسينية للطالب</summary>
+                        <form method="post" class="form-grid">
+                            <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="improvement_plan_save">
+                            <label>الطالب<select name="student_id" required><option value="">اختر الطالب</option><?php foreach($pdo->query('SELECT id,full_name FROM students WHERE active=1 ORDER BY full_name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option><?php endforeach ?></select></label>
+                            <label>عنوان الخطة<input name="title" required></label>
+                            <label>الأهداف<textarea name="goals" rows="3" required></textarea></label>
+                            <label>التدخلات والإجراءات<textarea name="interventions" rows="3"></textarea></label>
+                            <label>الشخص المسؤول<input name="responsible_person"></label>
+                            <label>تاريخ البدء<input name="start_date" type="date" value="<?= date('Y-m-d') ?>" required></label>
+                            <label>تاريخ المراجعة<input name="review_date" type="date"></label>
+                            <label>الحالة<select name="status"><option>قيد التنفيذ</option><option>قيد المراجعة</option><option>مكتملة</option><option>معلقة</option></select></label>
+                            <label>التقدم<input name="progress" placeholder="مثال: 50%"></label>
+                            <button class="btn primary">حفظ الخطة</button>
+                        </form>
+                    </details>
+                </div>
+                <div class="panel">
+                    <details open>
+                        <summary>جلسة إرشادية ومتابعة</summary>
+                        <form method="post" class="form-grid">
+                            <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="counseling_session_save">
+                            <label>الطالب<select name="student_id" required><option value="">اختر الطالب</option><?php foreach($pdo->query('SELECT id,full_name FROM students WHERE active=1 ORDER BY full_name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option><?php endforeach ?></select></label>
+                            <label>الحالة المرتبطة<select name="case_id"><option value="">بدون حالة محددة</option><?php foreach($pdo->query('SELECT c.id,c.category,s.full_name FROM counseling_cases c JOIN students s ON s.id=c.student_id ORDER BY c.id DESC') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['full_name'].' - '.$row['category']) ?></option><?php endforeach ?></select></label>
+                            <label>تاريخ الجلسة<input name="session_date" type="date" value="<?= date('Y-m-d') ?>" required></label>
+                            <label>نوع الجلسة<select name="session_type"><option>فردية</option><option>مجاميعية</option><option>مع ولي الأمر</option><option>مع المدرس</option><option>ملاحظة صفية</option></select></label>
+                            <label>ملخص الجلسة<textarea name="summary" rows="3"></textarea></label>
+                            <label>التوصيات<textarea name="recommendations" rows="3"></textarea></label>
+                            <label>تاريخ المتابعة<input name="follow_up_date" type="date"></label>
+                            <label>حالة المتابعة<select name="follow_up_status"><option>مطلوب</option><option>تمت</option><option>مؤجلة</option></select></label>
+                            <button class="btn primary">حفظ الجلسة</button>
+                        </form>
+                    </details>
+                </div>
+            </div>
+            <div class="panel">
+                <h2>سجل الإرشاد والتطوير</h2>
+                <div class="table-wrap"><table><thead><tr><th>الطالب</th><th>النوع</th><th>التفاصيل</th><th>التاريخ والحالة</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT b.*,s.full_name FROM behavior_notes b JOIN students s ON s.id=b.student_id ORDER BY b.incident_date DESC,b.id DESC LIMIT 30') as $row): ?>
+                    <tr><td><?= e($row['full_name']) ?></td><td><?= e($row['behavior_type'].' — '.$row['category']) ?></td><td><?= e($row['description'].' '.$row['action_taken']) ?></td><td><?= e($row['incident_date']) ?></td></tr>
+                <?php endforeach ?>
+                <?php foreach($pdo->query('SELECT p.*,s.full_name FROM improvement_plans p JOIN students s ON s.id=p.student_id ORDER BY p.start_date DESC,p.id DESC LIMIT 30') as $row): ?>
+                    <tr><td><?= e($row['full_name']) ?></td><td>خطة: <?= e($row['title']) ?></td><td><?= e($row['goals'].' '.$row['progress']) ?></td><td><?= e($row['status'].' — '.$row['review_date']) ?></td></tr>
                 <?php endforeach ?>
                 </tbody></table></div>
             </div>

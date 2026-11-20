@@ -232,6 +232,57 @@ function db(): PDO {
             created_by INTEGER,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS counseling_cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            priority TEXT NOT NULL DEFAULT 'متوسط',
+            status TEXT NOT NULL DEFAULT 'مفتوحة',
+            summary TEXT,
+            opened_at TEXT NOT NULL,
+            closed_at TEXT,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS behavior_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            incident_date TEXT NOT NULL,
+            behavior_type TEXT NOT NULL CHECK(behavior_type IN ('إيجابي','سلبي','محايد')),
+            category TEXT NOT NULL,
+            description TEXT NOT NULL,
+            action_taken TEXT,
+            notify_parent INTEGER NOT NULL DEFAULT 0,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS improvement_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            goals TEXT NOT NULL,
+            interventions TEXT,
+            responsible_person TEXT,
+            start_date TEXT NOT NULL,
+            review_date TEXT,
+            status TEXT NOT NULL DEFAULT 'قيد التنفيذ',
+            progress TEXT,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS counseling_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            case_id INTEGER,
+            session_date TEXT NOT NULL,
+            session_type TEXT NOT NULL,
+            summary TEXT,
+            recommendations TEXT,
+            follow_up_date TEXT,
+            follow_up_status TEXT NOT NULL DEFAULT 'مطلوب',
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
     ");
 
     foreach ([
