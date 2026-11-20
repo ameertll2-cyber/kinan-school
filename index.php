@@ -11,6 +11,79 @@ $page = (string)($_GET['page'] ?? 'dashboard');
 $message = '';
 $error = '';
 
+if (isset($_GET['office_export']) && $_GET['office_export'] !== '') {
+    $user = requireLogin();
+    if (!canManage($user)) {
+        http_response_code(403);
+        exit('ليست لديك صلاحية التصدير');
+    }
+    $kind = (string)$_GET['office_export'];
+
+    function csvCell($value): string {
+        $text = (string)$value;
+        if (str_contains($text, ',') || str_contains($text, '"') || str_contains($text, "\n")) {
+            $text = '"' . str_replace('"', '""', $text) . '"';
+        }
+        return $text;
+    }
+
+    if ($kind === 'students') {
+        $rows = $pdo->query('SELECT s.enrollment_number,s.full_name,s.national_id,c.name class_name,c.section,s.birth_date,s.gender,s.guardian_name,s.guardian_phone,s.address FROM students s LEFT JOIN classes c ON c.id=s.class_id WHERE s.active=1 ORDER BY s.id')->fetchAll();
+        $lines = ["\xEF\xBB\xBFرقم القيد,الاسم الكامل,رقم الهوية,الصف,الشعبة,تاريخ الميلاد,الجنس,ولي الأمر,هاتف ولي الأمر,العنوان"];
+        foreach ($rows as $row) {
+            $lines[] = implode(',', array_map('csvCell', [
+                $row['enrollment_number'], $row['full_name'], $row['national_id'], $row['class_name'],
+                $row['section'], $row['birth_date'], $row['gender'], $row['guardian_name'],
+                $row['guardian_phone'], $row['address']
+            ]));
+        }
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="kinan-students-' . date('Y-m-d') . '.csv"');
+        echo implode("\r\n", $lines);
+        exit;
+    }
+
+    if ($kind === 'grades') {
+        $rows = $pdo->query('SELECT s.full_name student_name,j.name subject_name,g.term,g.assessment_type,g.score,g.max_score,g.date,g.note FROM grades g JOIN students s ON s.id=g.student_id JOIN subjects j ON j.id=g.subject_id ORDER BY g.date DESC,g.id DESC')->fetchAll();
+        $lines = ["\xEF\xBB\xBFالطالب,المادة,الفصل,نوع التقييم,الدرجة,الدرجة العظمى,التاريخ,ملاحظة"];
+        foreach ($rows as $row) {
+            $lines[] = implode(',', array_map('csvCell', [
+                $row['student_name'], $row['subject_name'], $row['term'], $row['assessment_type'],
+                $row['score'], $row['max_score'], $row['date'], $row['note']
+            ]));
+        }
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="kinan-grades-' . date('Y-m-d') . '.csv"');
+        echo implode("\r\n", $lines);
+        exit;
+    }
+
+    if ($kind === 'attendance') {
+        $rows = $pdo->query("SELECT s.full_name,a.date,a.status,a.note FROM attendance a JOIN students s ON s.id=a.student_id ORDER BY a.date DESC,s.full_name")->fetchAll();
+        $lines = ["\xEF\xBB\xBFالطالب,التاريخ,الحالة,ملاحظة"];
+        foreach ($rows as $row) {
+            $lines[] = implode(',', array_map('csvCell', [$row['full_name'], $row['date'], $row['status'], $row['note']]));
+        }
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="kinan-attendance-' . date('Y-m-d') . '.csv"');
+        echo implode("\r\n", $lines);
+        exit;
+    }
+
+    if ($kind === 'word-students') {
+        $rows = $pdo->query('SELECT s.enrollment_number,s.full_name,s.national_id,c.name class_name,c.section,s.guardian_name,s.guardian_phone FROM students s LEFT JOIN classes c ON c.id=s.class_id WHERE s.active=1 ORDER BY s.id')->fetchAll();
+        header('Content-Type: application/msword; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="kinan-students-' . date('Y-m-d') . '.doc"');
+        echo '<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Tahoma}table{border-collapse:collapse;width:100%;direction:rtl}th,td{border:1px solid #777;padding:7px;text-align:right}</style></head><body>';
+        echo '<h2 align="center">قائمة طلبة المدرسة</h2><table><tr><th>رقم القيد</th><th>اسم الطالب</th><th>الصف والشعبة</th><th>رقم الهوية</th><th>ولي الأمر</th><th>الهاتف</th></tr>';
+        foreach ($rows as $row) {
+            echo '<tr><td>' . e((string)$row['enrollment_number']) . '</td><td>' . e($row['full_name']) . '</td><td>' . e($row['class_name'] . ' - ' . $row['section']) . '</td><td>' . e((string)$row['national_id']) . '</td><td>' . e((string)$row['guardian_name']) . '</td><td>' . e((string)$row['guardian_phone']) . '</td></tr>';
+        }
+        echo '</table></body></html>';
+        exit;
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();
     $action = (string)($_POST['action'] ?? '');
@@ -242,6 +315,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error = $e->getMessage();
                 }
             }
+        } elseif ($action === 'import_students_preview') {
+            if (empty($_FILES['students_csv']['tmp_name'])) {
+                $error = 'اختر ملف CSV للطلاب';
+            } else {
+                $handle = fopen($_FILES['students_csv']['tmp_name'], 'rb');
+                if (!$handle) {
+                    $error = 'تعذر قراءة ملف CSV';
+                } else {
+                    $rows = [];
+                    $lineNumber = 0;
+                    while (($cells = fgetcsv($handle)) !== false) {
+                        if (!$cells) continue;
+                        if (isset($cells[0])) $cells[0] = preg_replace('/^\xEF\xBB\xBF/', '', $cells[0]);
+                        $lineNumber++;
+                        if ($lineNumber === 1) {
+                            $headers = array_map(fn($v) => trim((string)$v), $cells);
+                            continue;
+                        }
+                        if (count(array_filter($cells, fn($v) => trim((string)$v) !== '')) === 0) continue;
+                        $data = [];
+                        foreach ($headers as $i => $header) {
+                            $data[$header] = trim((string)($cells[$i] ?? ''));
+                        }
+                        $rows[] = $data;
+                    }
+                    fclose($handle);
+                    if (!$rows) {
+                        $error = 'لا توجد صفوف بيانات صالحة للاستيراد';
+                    } else {
+                        $_SESSION['pending_student_import'] = $rows;
+                        $message = 'تمت معاينة ' . count($rows) . ' صفًا. راجع القائمة ثم أكد الاستيراد.';
+                    }
+                }
+            }
+        } elseif ($action === 'import_students_confirm') {
+            $rows = $_SESSION['pending_student_import'] ?? [];
+            if (!$rows) {
+                $error = 'لا توجد بيانات للاستيراد؛ ارفع ملفاً جديداً أولاً';
+            } else {
+                $classStmt = $pdo->prepare('SELECT id FROM classes WHERE name=? OR name||" - "||section=? LIMIT 1');
+                $insert = $pdo->prepare('INSERT INTO students (full_name,national_id,class_id,guardian_name,guardian_phone,address,birth_date,gender,enrollment_number) VALUES (?,?,?,?,?,?,?,?,?)');
+                $added = 0;
+                $pdo->beginTransaction();
+                try {
+                    foreach ($rows as $row) {
+                        $name = $row['الاسم الكامل'] ?? $row['name'] ?? '';
+                        if ($name === '') continue;
+                        $className = $row['الصف'] ?? $row['class'] ?? '';
+                        $classId = null;
+                        if ($className !== '') {
+                            $classStmt->execute([$className, $className]);
+                            $classId = $classStmt->fetchColumn() ?: null;
+                        }
+                        $insert->execute([
+                            $name,
+                            $row['رقم الهوية'] ?? $row['national_id'] ?? '',
+                            $classId,
+                            $row['ولي الأمر'] ?? $row['guardian_name'] ?? '',
+                            $row['هاتف ولي الأمر'] ?? $row['guardian_phone'] ?? '',
+                            $row['العنوان'] ?? $row['address'] ?? '',
+                            $row['تاريخ الميلاد'] ?? $row['birth_date'] ?? '',
+                            $row['الجنس'] ?? $row['gender'] ?? '',
+                            $row['رقم القيد'] ?? $row['enrollment_number'] ?? ''
+                        ]);
+                        $added++;
+                    }
+                    $pdo->commit();
+                    unset($_SESSION['pending_student_import']);
+                    $message = 'تم استيراد ' . $added . ' طالبًا بنجاح';
+                } catch (Throwable $e) {
+                    $pdo->rollBack();
+                    $error = 'تعذر إتمام الاستيراد';
+                }
+        }
         } elseif ($action === 'backup_export') {
             $password = (string)$_POST['backup_password'];
             if (strlen($password) < 8) {
@@ -404,6 +551,7 @@ if ($page === 'login' && $error === '') {
                 <a class="<?= $page==='parents'?'active':'' ?>" href="?page=parents"><span>♙</span> أولياء الأمور والإشعارات</a>
                 <a class="<?= $page==='curriculum'?'active':'' ?>" href="?page=curriculum"><span>▣</span> المناهج والكتب والنماذج</a>
                 <a class="<?= $page==='correspondence'?'active':'' ?>" href="?page=correspondence"><span>✉</span> المراسلات الإدارية</a>
+                <a class="<?= $page==='office'?'active':'' ?>" href="?page=office"><span>⇄</span> Word وExcel والسجلات</a>
             <?php endif ?>
             <a class="<?= $page==='learning'?'active':'' ?>" href="?page=learning"><span>▶</span> المحاضرات والواجبات</a>
             <?php if ($user['role'] === 'ولي أمر'): ?>
@@ -430,7 +578,7 @@ if ($page === 'login' && $error === '') {
                     'classes'=>'الصفوف والشعب','subjects'=>'المواد الدراسية','attendance'=>'الحضور والغياب',
                     'grades'=>'سجل الدرجات','backup'=>'النسخ الاحتياطية','accounting'=>'المحاسبة والرسوم',
                     'parents'=>'أولياء الأمور والإشعارات','parent_portal'=>'بوابة ولي الأمر','notifications'=>'الإشعارات',
-                    'curriculum'=>'المناهج والكتب والنماذج','learning'=>'المحاضرات والواجبات','correspondence'=>'المراسلات الإدارية'
+                    'curriculum'=>'المناهج والكتب والنماذج','learning'=>'المحاضرات والواجبات','correspondence'=>'المراسلات الإدارية','office'=>'التداول مع Word وExcel'
                ][$page] ?? 'كِنان') ?></h1>
             </div>
         </header>
@@ -916,6 +1064,54 @@ if ($page === 'login' && $error === '') {
                     <tr><td><?= e($row['correspondence_type'].' / '.$row['reference_number']) ?></td><td><?= e($row['subject'].' — '.$row['recipient']) ?></td><td><?= e($row['correspondence_date']) ?></td><td><?= e($row['status']) ?></td><td><?php if($row['attachment_path']): ?><a href="<?= e($row['attachment_path']) ?>" target="_blank">فتح</a><?php endif ?></td></tr>
                 <?php endforeach ?>
                 </tbody></table></div>
+            </div>
+        <?php elseif ($page === 'office' && canManage($user)): ?>
+            <div class="office-grid">
+                <div class="panel">
+                    <h2>تصدير لقائمة Excel</h2>
+                    <p>يتم تصدير ملفات CSV بترميز UTF-8 وBOM، فتفتح مباشرةً في Microsoft Excel وتحافظ على العربية.</p>
+                    <div class="export-actions">
+                        <a class="btn primary" href="?office_export=students">تصدير الطلبة CSV</a>
+                        <a class="btn primary" href="?office_export=grades">تصدير الدرجات CSV</a>
+                        <a class="btn primary" href="?office_export=attendance">تصدير الحضور CSV</a>
+                    </div>
+                </div>
+                <div class="panel">
+                    <h2>طباعة ونقل إلى Word</h2>
+                    <p>يولد النظام مستند .doc عربيًا يمكن فتحه والتعديل عليه مباشرةً في Microsoft Word.</p>
+                    <div class="export-actions">
+                        <a class="btn primary" href="?office_export=word-students">قائمة الطلبة في Word</a>
+                    </div>
+                </div>
+                <div class="panel">
+                    <h2>استيراد الطلبة من CSV</h2>
+                    <p>اعتمد رؤوس الأعمدة العربية التالية: الاسم الكامل، رقم الهوية، رقم القيد، الصف، تاريخ الميلاد، الجنس، ولي الأمر، هاتف ولي الأمر، والعنوان.</p>
+                    <form method="post" enctype="multipart/form-data" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>">
+                        <input type="hidden" name="action" value="import_students_preview">
+                        <label>ملف الطلبة CSV<input type="file" name="students_csv" accept=".csv,text/csv" required></label>
+                        <button class="btn primary">معاينة الاستيراد</button>
+                    </form>
+                    <?php $pending=$_SESSION['pending_student_import'] ?? []; if ($pending): ?>
+                        <h3>معاينة <?= count($pending) ?> طالبًا</h3>
+                        <div class="table-wrap"><table><thead><tr><th>الاسم الكامل</th><th>رقم الهوية</th><th>رقم القيد</th><th>الصف</th><th>ولي الأمر</th></tr></thead><tbody>
+                        <?php foreach(array_slice($pending,0,100) as $row): ?>
+                            <tr><td><?= e($row['الاسم الكامل'] ?? $row['name'] ?? '') ?></td><td><?= e($row['رقم الهوية'] ?? $row['national_id'] ?? '') ?></td><td><?= e($row['رقم القيد'] ?? $row['enrollment_number'] ?? '') ?></td><td><?= e($row['الصف'] ?? $row['class'] ?? '') ?></td><td><?= e($row['ولي الأمر'] ?? $row['guardian_name'] ?? '') ?></td></tr>
+                        <?php endforeach ?>
+                        </tbody></table></div>
+                        <form method="post">
+                            <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>">
+                            <input type="hidden" name="action" value="import_students_confirm">
+                            <button class="btn warning">تأكيد استيراد جميع الصفوف المعاينة</button>
+                        </form>
+                    <?php endif ?>
+                </div>
+                <div class="panel">
+                    <h2>قالب استيراد جاهز</h2>
+                    <p>يمكن إنشاء قالب CSV في Excel أو محرر نصوص وحفظه بترميز UTF-8.</p>
+                    <pre class="csv-template">الاسم الكامل,رقم الهوية,رقم القيد,الصف,تاريخ الميلاد,الجنس,ولي الأمر,هاتف ولي الأمر,العنوان
+يوسف محمد علي,1001001001,STD-001,الصف الخامس,2015-01-01,ذكر,محمد علي,07700000001,بغداد</pre>
+                </div>
             </div>
         <?php elseif ($page === 'backup' && canManage($user)): ?>
             <div class="backup-grid">
