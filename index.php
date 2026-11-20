@@ -82,6 +82,43 @@ if (isset($_GET['office_export']) && $_GET['office_export'] !== '') {
         echo '</table></body></html>';
         exit;
     }
+
+    if ($kind === 'student-record') {
+        $studentId=(int)($_GET['student_id'] ?? 0);
+        $term=trim((string)($_GET['term'] ?? 'الفصل الأول'));
+        $student=$pdo->query("SELECT s.*,c.name class_name,c.section,c.academic_year FROM students s LEFT JOIN classes c ON c.id=s.class_id WHERE s.id=$studentId")->fetch();
+        if (!$student) exit('الطالب غير موجود');
+        $grades=$pdo->query("SELECT g.*,j.name subject_name FROM grades g JOIN subjects j ON j.id=g.subject_id WHERE g.student_id=$studentId AND g.term=".$pdo->quote($term)." ORDER BY j.name")->fetchAll();
+        header('Content-Type: application/msword; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="kinan-record-'.$studentId.'.doc"');
+        echo '<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Tahoma}table{border-collapse:collapse;width:100%}th,td{border:1px solid #777;padding:8px;text-align:right}.summary{text-align:center}</style></head><body>';
+        echo '<h2 class="summary">كشف درجات طالب</h2><p><b>الطالب:</b> '.e($student['full_name']).' &nbsp; <b>الصف:</b> '.e($student['class_name'].' - '.$student['section']).' &nbsp; <b>الفصل:</b> '.e($term).'</p>';
+        echo '<table><tr><th>المادة</th><th>نوع التقييم</th><th>الدرجة</th><th>النسبة</th><th>النتيجة</th></tr>';
+        $total=0;$count=0;
+        foreach($grades as $row){
+            $pct=$row['max_score']>0?$row['score']/$row['max_score']*100:0;
+            $total+=$pct;$count++;
+            echo '<tr><td>'.e($row['subject_name']).'</td><td>'.e($row['assessment_type']).'</td><td>'.e((string)$row['score'].' / '.(string)$row['max_score']).'</td><td>'.number_format($pct,1).'%</td><td>'.($pct>=50?'ناجح':'دون النجاح').'</td></tr>';
+        }
+        $average=$count?$total/$count:0;
+        echo '</table><h3>المعدل العام: '.number_format($average,1).'%</h3><h3>النتيجة النهائية: '.($average>=50?'ناجح':'راسب').'</h3></body></html>';
+        exit;
+    }
+
+    if ($kind === 'certificate') {
+        $studentId=(int)($_GET['student_id'] ?? 0);
+        $student=$pdo->query("SELECT s.*,c.name class_name,c.section,c.academic_year FROM students s LEFT JOIN classes c ON c.id=s.class_id WHERE s.id=$studentId")->fetch();
+        if (!$student) exit('الطالب غير موجود');
+        $grades=$pdo->query("SELECT g.score,g.max_score FROM grades g WHERE g.student_id=$studentId")->fetchAll();
+        $sum=0;$count=0;
+        foreach($grades as $row){if($row['max_score']>0){$sum+=$row['score']/ $row['max_score']*100;$count++;}}
+        $average=$count?$sum/$count:0;
+        header('Content-Type: application/msword; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="kinan-certificate-'.$studentId.'.doc"');
+        echo '<html dir="rtl"><head><meta charset="UTF-8"><style>@page{size:A4;margin:25mm}body{font-family:Tahoma;text-align:center} .certificate{border:5px double #1458a8;padding:35px;min-height:480px}.name{font-size:28px;color:#1458a8}.seal{margin-top:55px}</style></head><body>';
+        echo '<div class="certificate"><h1>شهادة مدرسية</h1><p>تشهد إدارة المدرسة بإتمام الطالب المسمى</p><p class="name">'.e($student['full_name']).'</p><p>الدراسة في '.e($student['class_name'].' - '.$student['section']).'</p><p>للعام الدراسي '.e((string)$student['academic_year']).'</p><p><b>المعدل العام:</b> '.number_format($average,1).'%</p><p><b>النتيجة:</b> '.($average>=50?'ناجح':'تحت المراجعة').'</p><p class="seal">مدير المدرسة &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; الختم الرسمي</p></div></body></html>';
+        exit;
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -1246,6 +1283,24 @@ if ($page === 'login' && $error === '') {
                     <p>يمكن إنشاء قالب CSV في Excel أو محرر نصوص وحفظه بترميز UTF-8.</p>
                     <pre class="csv-template">الاسم الكامل,رقم الهوية,رقم القيد,الصف,تاريخ الميلاد,الجنس,ولي الأمر,هاتف ولي الأمر,العنوان
 يوسف محمد علي,1001001001,STD-001,الصف الخامس,2015-01-01,ذكر,محمد علي,07700000001,بغداد</pre>
+                </div>
+                <div class="panel">
+                    <h2>كشف الدرجات والشهادات المدرسية</h2>
+                    <form method="get" class="form-grid" action="index.php">
+                        <input type="hidden" name="office_export" value="student-record">
+                        <label>الطالب
+                            <select name="student_id" required><?php foreach($pdo->query('SELECT id,full_name FROM students WHERE active=1 ORDER BY full_name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option><?php endforeach ?></select>
+                        </label>
+                        <label>الفصل<select name="term"><option>الفصل الأول</option><option>الفصل الثاني</option><option>امتحان شامل</option></select></label>
+                        <button class="btn primary">تنزيل كشف الدرجات Word</button>
+                    </form>
+                    <form method="get" class="form-grid" action="index.php">
+                        <input type="hidden" name="office_export" value="certificate">
+                        <label>الطالب
+                            <select name="student_id" required><?php foreach($pdo->query('SELECT id,full_name FROM students WHERE active=1 ORDER BY full_name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option><?php endforeach ?></select>
+                        </label>
+                        <button class="btn primary">تنزيل الشهادة المدرسية Word</button>
+                    </form>
                 </div>
             </div>
         <?php elseif ($page === 'backup' && canManage($user)): ?>
