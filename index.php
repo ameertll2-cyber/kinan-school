@@ -39,6 +39,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $accountingActions = ['fee_type_save','invoice_save','payment_save','expense_save'];
         if (!canManage($user) && $action !== 'attendance_save' && $action !== 'grade_save'
+            && $action !== 'notification_read'
             && !in_array($action, $accountingActions, true)) {
             $error = 'ليست لديك صلاحية تنفيذ هذا الإجراء';
         } elseif (in_array($action, $accountingActions, true) && !canAccounting($user)) {
@@ -146,6 +147,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->prepare('INSERT INTO grades (student_id,subject_id,type,score,max_score,date,note) VALUES (?,?,?,?,?,?,?)')
                 ->execute([(int)$_POST['student_id'], (int)$_POST['subject_id'], trim((string)$_POST['type']), (float)$_POST['score'], (float)$_POST['max_score'], (string)$_POST['date'], trim((string)$_POST['note'])]);
             $message = 'تمت إضافة الدرجة';
+        } elseif ($action === 'parent_link_save') {
+            $parentUserId = (int)$_POST['parent_user_id'];
+            $studentId = (int)$_POST['student_id'];
+            if (!$parentUserId || !$studentId) {
+                $error = 'اختر ولي الأمر والطالب';
+            } else {
+                $pdo->prepare('INSERT OR IGNORE INTO parent_student_links (parent_user_id,student_id,relationship) VALUES (?,?,?)')
+                    ->execute([$parentUserId, $studentId, trim((string)$_POST['relationship']) ?: 'ولي أمر']);
+                $message = 'تم ربط ولي الأمر بالطالب';
+            }
+        } elseif ($action === 'notification_save') {
+            $title = trim((string)$_POST['title']);
+            $body = trim((string)$_POST['body']);
+            $audience = (string)$_POST['audience'];
+            $parentUserId = $audience === 'ولي أمر محدد' ? (int)$_POST['parent_user_id'] : null;
+            $studentId = $audience === 'طالب محدد' ? (int)$_POST['student_id'] : null;
+            if ($title === '' || $body === '' || ($audience === 'ولي أمر محدد' && !$parentUserId) || ($audience === 'طالب محدد' && !$studentId)) {
+                $error = 'أدخل عنوان ومحتوى والإستهداف المطلوب';
+            } else {
+                $pdo->prepare('INSERT INTO notifications (title,body,audience,parent_user_id,student_id,created_by) VALUES (?,?,?,?,?,?)')
+                    ->execute([$title, $body, $audience, $parentUserId, $studentId, (int)$user['id']]);
+                $message = 'تم إرسال الإشعار';
+            }
+        } elseif ($action === 'notification_read') {
+            $notificationId = (int)$_POST['notification_id'];
+            $pdo->prepare('INSERT OR IGNORE INTO notification_reads (notification_id,user_id) VALUES (?,?)')
+                ->execute([$notificationId, (int)$user['id']]);
         } elseif ($action === 'backup_export') {
             $password = (string)$_POST['backup_password'];
             if (strlen($password) < 8) {
@@ -273,6 +301,13 @@ if ($page === 'login' && $error === '') {
             <?php if (canAccounting($user)): ?>
                 <a class="<?= $page==='accounting'?'active':'' ?>" href="?page=accounting"><span>د.ع</span> المحاسبة والرسوم</a>
             <?php endif ?>
+            <?php if (canManage($user)): ?>
+                <a class="<?= $page==='parents'?'active':'' ?>" href="?page=parents"><span>♙</span> أولياء الأمور والإشعارات</a>
+            <?php endif ?>
+            <?php if ($user['role'] === 'ولي أمر'): ?>
+                <a class="<?= $page==='parent_portal'?'active':'' ?>" href="?page=parent_portal"><span>⌂</span> بوابة ولي الأمر</a>
+                <a class="<?= $page==='notifications'?'active':'' ?>" href="?page=notifications"><span>!</span> الإشعارات</a>
+            <?php endif ?>
         </nav>
         <div class="sidebar-user">
             <strong><?= e($user['name']) ?></strong>
@@ -291,7 +326,8 @@ if ($page === 'login' && $error === '') {
                 <h1><?= e([
                     'dashboard'=>'لوحة التحكم','students'=>'إدارة الطلبة','staff'=>'الكادر التدريسي',
                     'classes'=>'الصفوف والشعب','subjects'=>'المواد الدراسية','attendance'=>'الحضور والغياب',
-                    'grades'=>'سجل الدرجات','backup'=>'النسخ الاحتياطية','accounting'=>'المحاسبة والرسوم'
+                    'grades'=>'سجل الدرجات','backup'=>'النسخ الاحتياطية','accounting'=>'المحاسبة والرسوم',
+                    'parents'=>'أولياء الأمور والإشعارات','parent_portal'=>'بوابة ولي الأمر','notifications'=>'الإشعارات'
                ][$page] ?? 'كِنان') ?></h1>
             </div>
         </header>
@@ -492,6 +528,153 @@ if ($page === 'login' && $error === '') {
                 endforeach;
                 ?>
                 </tbody></table></div>
+            </div>
+        <?php elseif ($page === 'parents' && canManage($user)): ?>
+            <div class="panel">
+                <details open>
+                    <summary>ربط ولي الأمر بالطالب</summary>
+                    <form method="post" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>">
+                        <input type="hidden" name="action" value="parent_link_save">
+                        <label>ولي الأمر
+                            <select name="parent_user_id" required><option value="">اختر ولي الأمر</option>
+                            <?php foreach($pdo->query("SELECT id,name,username FROM users WHERE role='ولي أمر' AND active=1 ORDER BY name") as $row): ?>
+                                <option value="<?= $row['id'] ?>"><?= e($row['name'].' ('.$row['username'].')') ?></option>
+                            <?php endforeach ?>
+                            </select>
+                        </label>
+                        <label>الطالب
+                            <select name="student_id" required><option value="">اختر الطالب</option>
+                            <?php foreach($pdo->query("SELECT id,full_name FROM students WHERE active=1 ORDER BY full_name") as $row): ?>
+                                <option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option>
+                            <?php endforeach ?>
+                            </select>
+                        </label>
+                        <label>صلة القرابة<input name="relationship" value="ولي أمر"></label>
+                        <button class="btn primary">ربط الحساب</button>
+                    </form>
+                </details>
+                <details open>
+                    <summary>إرسال إشعار للبوابة</summary>
+                    <form method="post" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>">
+                        <input type="hidden" name="action" value="notification_save">
+                        <label>عنوان الإشعار<input name="title" required></label>
+                        <label>الاستهداف
+                            <select name="audience" id="notificationAudience">
+                                <option value="ولي أمر">جميع أولياء الأمور</option>
+                                <option value="ولي أمر محدد">ولي أمر محدد</option>
+                                <option value="طالب محدد">طالب محدد</option>
+                            </select>
+                        </label>
+                        <label>ولي الأمر المحدد
+                            <select name="parent_user_id"><option value="">لا ينطبق</option>
+                            <?php foreach($pdo->query("SELECT id,name FROM users WHERE role='ولي أمر' AND active=1 ORDER BY name") as $row): ?>
+                                <option value="<?= $row['id'] ?>"><?= e($row['name']) ?></option>
+                            <?php endforeach ?>
+                            </select>
+                        </label>
+                        <label>الطالب المحدد
+                            <select name="student_id"><option value="">لا ينطبق</option>
+                            <?php foreach($pdo->query("SELECT id,full_name FROM students WHERE active=1 ORDER BY full_name") as $row): ?>
+                                <option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option>
+                            <?php endforeach ?>
+                            </select>
+                        </label>
+                        <label>نص الإشعار<textarea name="body" rows="4" required></textarea></label>
+                        <button class="btn primary">إرسال الإشعار</button>
+                    </form>
+                </details>
+            </div>
+            <div class="panel">
+                <h2>الربطات الحالية والإشعارات</h2>
+                <div class="table-wrap"><table><thead><tr><th>ولي الأمر</th><th>الطالب</th><th>صلة القرابة</th></tr></thead><tbody>
+                <?php foreach($pdo->query("SELECT l.relationship,u.name parent_name,s.full_name student_name FROM parent_student_links l JOIN users u ON u.id=l.parent_user_id JOIN students s ON s.id=l.student_id ORDER BY l.id DESC") as $row): ?>
+                    <tr><td><?= e($row['parent_name']) ?></td><td><?= e($row['student_name']) ?></td><td><?= e($row['relationship']) ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+                <div class="table-wrap"><table><thead><tr><th>الإشعار</th><th>الاستهداف</th><th>التاريخ</th></tr></thead><tbody>
+                <?php foreach($pdo->query("SELECT * FROM notifications ORDER BY id DESC LIMIT 20") as $row): ?>
+                    <tr><td><strong><?= e($row['title']) ?></strong><br><?= e($row['body']) ?></td><td><?= e($row['audience']) ?></td><td><?= e(substr($row['created_at'],0,16)) ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+            </div>
+        <?php elseif ($page === 'parent_portal' && $user['role'] === 'ولي أمر'): ?>
+            <?php
+            $linkedIds = [];
+            $linkedStudents = [];
+            $linkStmt = $pdo->prepare("SELECT s.* FROM parent_student_links l JOIN students s ON s.id=l.student_id WHERE l.parent_user_id=? AND s.active=1");
+            $linkStmt->execute([(int)$user['id']]);
+            $linkedStudents = $linkStmt->fetchAll();
+            foreach ($linkedStudents as $linked) { $linkedIds[]=(int)$linked['id']; }
+            ?>
+            <div class="stat-grid">
+                <article class="stat-card"><span>الطلاب المرتبطون</span><strong><?= count($linkedStudents) ?></strong></article>
+                <article class="stat-card"><span>أيام الحضور المسجلة</span><strong><?php
+                    $attendanceCount=0;
+                    foreach($linkedIds as $studentId){$attendanceCount += (int)$pdo->query("SELECT COUNT(*) FROM attendance WHERE student_id=$studentId")->fetchColumn();}
+                    echo $attendanceCount;
+                ?></strong></article>
+                <article class="stat-card"><span>سجل الدرجات</span><strong><?php
+                    $gradeCount=0;
+                    foreach($linkedIds as $studentId){$gradeCount += (int)$pdo->query("SELECT COUNT(*) FROM grades WHERE student_id=$studentId")->fetchColumn();}
+                    echo $gradeCount;
+                ?></strong></article>
+            </div>
+            <?php foreach($linkedStudents as $student): ?>
+                <div class="panel">
+                    <h2><?= e($student['full_name']) ?></h2>
+                    <div class="stat-grid compact">
+                        <?php
+                        $studentId=(int)$student['id'];
+                        $present=(int)$pdo->query("SELECT COUNT(*) FROM attendance WHERE student_id=$studentId AND status='حاضر'")->fetchColumn();
+                        $absent=(int)$pdo->query("SELECT COUNT(*) FROM attendance WHERE student_id=$studentId AND status LIKE 'غي%'")->fetchColumn();
+                        $late=(int)$pdo->query("SELECT COUNT(*) FROM attendance WHERE student_id=$studentId AND status='متأخر'")->fetchColumn();
+                        ?>
+                        <article class="stat-card"><span>حضور</span><strong><?= $present ?></strong></article>
+                        <article class="stat-card"><span>غياب</span><strong><?= $absent ?></strong></article>
+                        <article class="stat-card"><span>تأخر</span><strong><?= $late ?></strong></article>
+                    </div>
+                    <div class="table-wrap"><table><thead><tr><th>التاريخ</th><th>الحالة</th><th>ملاحظة</th></tr></thead><tbody>
+                    <?php foreach($pdo->query("SELECT date,status,note FROM attendance WHERE student_id=$studentId ORDER BY date DESC LIMIT 15") as $row): ?>
+                        <tr><td><?= e($row['date']) ?></td><td><?= e($row['status']) ?></td><td><?= e((string)$row['note']) ?></td></tr>
+                    <?php endforeach ?>
+                    </tbody></table></div>
+                    <div class="table-wrap"><table><thead><tr><th>المادة</th><th>التقييم</th><th>الدرجة</th><th>التاريخ</th></tr></thead><tbody>
+                    <?php foreach($pdo->query("SELECT g.*,j.name subject_name FROM grades g JOIN subjects j ON j.id=g.subject_id WHERE g.student_id=$studentId ORDER BY g.date DESC,g.id DESC LIMIT 15") as $row): ?>
+                        <tr><td><?= e($row['subject_name']) ?></td><td><?= e($row['type']) ?></td><td><?= e((string)$row['score'].' / '.(string)$row['max_score']) ?></td><td><?= e($row['date']) ?></td></tr>
+                    <?php endforeach ?>
+                    </tbody></table></div>
+                </div>
+            <?php endforeach ?>
+            <?php if (!$linkedStudents): ?><div class="panel"><h2>لا توجد روابط طلابية</h2><p>اطلب من إدارة المدرسة ربط حساب ولي الأمر بالطالب.</p></div><?php endif ?>
+        <?php elseif ($page === 'notifications' && $user['role'] === 'ولي أمر'): ?>
+            <?php
+            $linkedIds=[];
+            $linkStmt=$pdo->prepare("SELECT student_id FROM parent_student_links WHERE parent_user_id=?");
+            $linkStmt->execute([(int)$user['id']]);
+            foreach($linkStmt->fetchAll() as $link){$linkedIds[]=(int)$link['student_id'];}
+            ?>
+            <div class="panel">
+                <h2>الإشعارات الواردة</h2>
+                <?php $found=false; foreach($pdo->query("SELECT * FROM notifications ORDER BY id DESC") as $notification):
+                    $visible = $notification['audience'] === 'ولي أمر'
+                        || ($notification['audience'] === 'ولي أمر محدد' && (int)$notification['parent_user_id'] === (int)$user['id'])
+                        || ($notification['audience'] === 'طالب محدد' && in_array((int)$notification['student_id'],$linkedIds,true));
+                    if (!$visible) continue; $found=true;
+                    $readStmt=$pdo->prepare("SELECT 1 FROM notification_reads WHERE notification_id=? AND user_id=?");
+                    $readStmt->execute([(int)$notification['id'],(int)$user['id']]);
+                    $read=(bool)$readStmt->fetchColumn();
+                ?>
+                    <article class="notification-card <?= $read?'read':'' ?>">
+                        <div><strong><?= e($notification['title']) ?></strong><time><?= e(substr($notification['created_at'],0,16)) ?></time></div>
+                        <p><?= e($notification['body']) ?></p>
+                        <?php if (!$read): ?>
+                            <form method="post"><input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="notification_read"><input type="hidden" name="notification_id" value="<?= $notification['id'] ?>"><button class="link-button">تعليم كمقروء</button></form>
+                        <?php else:?><span class="badge success">تمت القراءة</span><?php endif ?>
+                    </article>
+                <?php endforeach ?>
+                <?php if (!$found): ?><p class="muted">لا توجد إشعارات جديدة.</p><?php endif ?>
             </div>
         <?php elseif ($page === 'backup' && canManage($user)): ?>
             <div class="backup-grid">

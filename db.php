@@ -133,6 +133,31 @@ function db(): PDO {
             created_by INTEGER,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS parent_student_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_user_id INTEGER NOT NULL,
+            student_id INTEGER NOT NULL,
+            relationship TEXT NOT NULL DEFAULT 'ولي أمر',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(parent_user_id, student_id)
+        );
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            audience TEXT NOT NULL DEFAULT 'ولي أمر',
+            parent_user_id INTEGER,
+            student_id INTEGER,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS notification_reads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notification_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(notification_id, user_id)
+        );
     ");
 
     seedDemoData($pdo);
@@ -193,6 +218,21 @@ function seedDemoData(PDO $pdo): void {
             ('الرسوم الدراسية', 750000, '2026-2027'),
             ('رسوم النقل', 150000, '2026-2027'),
             ('الأنشطة والرياضة', 50000, '2026-2027')");
+    }
+
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM parent_student_links")->fetchColumn();
+    if ($count === 0) {
+        $parentId = (int)$pdo->query("SELECT id FROM users WHERE username='parent'")->fetchColumn();
+        if ($parentId) {
+            $pdo->prepare('INSERT OR IGNORE INTO parent_student_links (parent_user_id,student_id,relationship) VALUES (?,?,?)')
+                ->execute([$parentId, 1, 'ولي أمر']);
+        }
+    }
+
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM notifications")->fetchColumn();
+    if ($count === 0) {
+        $pdo->exec("INSERT INTO notifications (title,body,audience,created_by) VALUES
+            ('مرحبا بكم في بوابة ولي الأمر','يمكنكم متابعة الحضور والغياب والإشعارات الخاصة بالطالب المرتبط بحسابكم.','ولي أمر',1)");
     }
 
     $count = (int)$pdo->query("SELECT COUNT(*) FROM invoices")->fetchColumn();
