@@ -283,6 +283,58 @@ function db(): PDO {
             created_by INTEGER,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS exam_calendars (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            academic_year TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            grade_name TEXT NOT NULL,
+            period_name TEXT NOT NULL,
+            exam_round TEXT NOT NULL DEFAULT 'الدور الأول',
+            study_type TEXT NOT NULL DEFAULT 'صباحي نظامي',
+            start_date TEXT,
+            end_date TEXT,
+            result_date TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(academic_year,stage,grade_name,period_name,exam_round,study_type)
+        );
+        CREATE TABLE IF NOT EXISTS grade_policies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            academic_year TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            grade_name TEXT NOT NULL,
+            period_name TEXT NOT NULL,
+            daily_weight REAL NOT NULL DEFAULT 20,
+            monthly_weight REAL NOT NULL DEFAULT 20,
+            midterm_weight REAL NOT NULL DEFAULT 20,
+            final_weight REAL NOT NULL DEFAULT 40,
+            pass_score REAL NOT NULL DEFAULT 50,
+            final_max_score REAL NOT NULL DEFAULT 100,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(academic_year,stage,grade_name,period_name)
+        );
+        CREATE TABLE IF NOT EXISTS final_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            subject_id INTEGER,
+            academic_year TEXT NOT NULL,
+            period_name TEXT NOT NULL,
+            exam_round TEXT NOT NULL,
+            study_type TEXT NOT NULL,
+            daily_score REAL NOT NULL DEFAULT 0,
+            monthly_score REAL NOT NULL DEFAULT 0,
+            midterm_score REAL NOT NULL DEFAULT 0,
+            final_score REAL NOT NULL DEFAULT 0,
+            calculated_score REAL NOT NULL DEFAULT 0,
+            result_status TEXT NOT NULL DEFAULT 'قيد الحساب',
+            result_date TEXT,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(student_id,subject_id,academic_year,period_name,exam_round)
+        );
     ");
 
     foreach ([
@@ -292,17 +344,25 @@ function db(): PDO {
         "ALTER TABLE students ADD COLUMN birth_date TEXT",
         "ALTER TABLE students ADD COLUMN gender TEXT",
         "ALTER TABLE students ADD COLUMN enrollment_number TEXT",
+        "ALTER TABLE students ADD COLUMN study_type TEXT NOT NULL DEFAULT 'صباحي نظامي'",
+        "ALTER TABLE grades ADD COLUMN academic_year TEXT NOT NULL DEFAULT '2026-2027'",
+        "ALTER TABLE grades ADD COLUMN period_name TEXT NOT NULL DEFAULT 'الفصل الأول'",
+        "ALTER TABLE grades ADD COLUMN exam_round TEXT NOT NULL DEFAULT 'الدور الأول'",
+        "ALTER TABLE grades ADD COLUMN study_type TEXT NOT NULL DEFAULT 'صباحي نظامي'",
         "ALTER TABLE staff ADD COLUMN specialization TEXT",
         "ALTER TABLE staff ADD COLUMN staff_number TEXT",
     ] as $migration) {
-        $columns = $migration === "ALTER TABLE grades ADD COLUMN term TEXT NOT NULL DEFAULT 'الفصل الأول'"
-            ? 'term'
-            : (str_contains($migration, 'assessment_type') ? 'assessment_type'
-                : (str_contains($migration, 'created_by') ? 'created_by'
-                    : (str_contains($migration, 'birth_date') ? 'birth_date'
-                        : (str_contains($migration, 'gender') ? 'gender'
-                            : (str_contains($migration, 'enrollment_number') ? 'enrollment_number'
-                                : (str_contains($migration, 'specialization') ? 'specialization' : 'staff_number'))))));
+        $columnNames = [
+            'term','assessment_type','created_by','birth_date','gender','enrollment_number',
+            'study_type','academic_year','period_name','exam_round','specialization','staff_number'
+        ];
+        $columns = '';
+        foreach ($columnNames as $candidate) {
+            if (str_contains($migration, ' ADD COLUMN ' . $candidate . ' ')) {
+                $columns = $candidate;
+                break;
+            }
+        }
         $table = str_contains($migration, 'ALTER TABLE grades') ? 'grades'
             : (str_contains($migration, 'ALTER TABLE students') ? 'students' : 'staff');
         $existingColumns = array_column($pdo->query("PRAGMA table_info($table)")->fetchAll(), 'name');

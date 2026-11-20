@@ -161,8 +161,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif (in_array($action, $counselingActions, true) && !canCounsel($user)) {
             $error = 'ليست لديك صلاحية تنفيذ الإجراء التربوي';
         } elseif ($action === 'student_save') {
-            $pdo->prepare('INSERT INTO students (full_name,national_id,class_id,guardian_name,guardian_phone,address,birth_date,gender,enrollment_number) VALUES (?,?,?,?,?,?,?,?,?)')
-                ->execute([trim((string)$_POST['full_name']), trim((string)$_POST['national_id']), (int)$_POST['class_id'], trim((string)$_POST['guardian_name']), trim((string)$_POST['guardian_phone']), trim((string)$_POST['address']), trim((string)$_POST['birth_date']), trim((string)$_POST['gender']), trim((string)$_POST['enrollment_number'])]);
+            $pdo->prepare('INSERT INTO students (full_name,national_id,class_id,guardian_name,guardian_phone,address,birth_date,gender,enrollment_number,study_type) VALUES (?,?,?,?,?,?,?,?,?,?)')
+                ->execute([trim((string)$_POST['full_name']), trim((string)$_POST['national_id']), (int)$_POST['class_id'], trim((string)$_POST['guardian_name']), trim((string)$_POST['guardian_phone']), trim((string)$_POST['address']), trim((string)$_POST['birth_date']), trim((string)$_POST['gender']), trim((string)$_POST['enrollment_number']), trim((string)$_POST['study_type'])]);
             $message = 'تمت إضافة الطالب';
         } elseif ($action === 'staff_save') {
             $pdo->prepare('INSERT INTO staff (full_name,job_title,phone,email) VALUES (?,?,?,?)')
@@ -265,8 +265,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($maxScore <= 0 || $score < 0 || $score > $maxScore) {
                 $error = 'الدرجة يجب أن تكون بين صفر والدرجة العظمى';
             } else {
-            $pdo->prepare('INSERT INTO grades (student_id,subject_id,type,score,max_score,date,note,term,assessment_type,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)')
-                ->execute([(int)$_POST['student_id'], (int)$_POST['subject_id'], trim((string)$_POST['assessment_type']), $score, $maxScore, (string)$_POST['date'], trim((string)$_POST['note']), trim((string)$_POST['term']), trim((string)$_POST['assessment_type']), (int)$user['id']]);
+            $pdo->prepare('INSERT INTO grades (student_id,subject_id,type,score,max_score,date,note,term,assessment_type,created_by,academic_year,period_name,exam_round,study_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+                ->execute([(int)$_POST['student_id'], (int)$_POST['subject_id'], trim((string)$_POST['assessment_type']), $score, $maxScore, (string)$_POST['date'], trim((string)$_POST['note']), trim((string)$_POST['term']), trim((string)$_POST['assessment_type']), (int)$user['id'], trim((string)$_POST['academic_year']), trim((string)$_POST['period_name']), trim((string)$_POST['exam_round']), trim((string)$_POST['study_type'])]);
             $message = 'تمت إضافة الدرجة';
             }
         } elseif ($action === 'parent_link_save') {
@@ -396,7 +396,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = 'لا توجد بيانات للاستيراد؛ ارفع ملفاً جديداً أولاً';
             } else {
                 $classStmt = $pdo->prepare('SELECT id FROM classes WHERE name=? OR name||" - "||section=? LIMIT 1');
-                $insert = $pdo->prepare('INSERT INTO students (full_name,national_id,class_id,guardian_name,guardian_phone,address,birth_date,gender,enrollment_number) VALUES (?,?,?,?,?,?,?,?,?)');
+                $insert = $pdo->prepare('INSERT INTO students (full_name,national_id,class_id,guardian_name,guardian_phone,address,birth_date,gender,enrollment_number,study_type) VALUES (?,?,?,?,?,?,?,?,?,?)');
                 $added = 0;
                 $pdo->beginTransaction();
                 try {
@@ -418,7 +418,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $row['العنوان'] ?? $row['address'] ?? '',
                             $row['تاريخ الميلاد'] ?? $row['birth_date'] ?? '',
                             $row['الجنس'] ?? $row['gender'] ?? '',
-                            $row['رقم القيد'] ?? $row['enrollment_number'] ?? ''
+                            $row['رقم القيد'] ?? $row['enrollment_number'] ?? '',
+                            $row['الالتحاق'] ?? $row['study_type'] ?? 'صباحي نظامي'
                         ]);
                         $added++;
                     }
@@ -471,6 +472,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare('INSERT INTO counseling_sessions (student_id,case_id,session_date,session_type,summary,recommendations,follow_up_date,follow_up_status,created_by) VALUES (?,?,?,?,?,?,?,?,?)')
                     ->execute([$studentId,(int)($_POST['case_id'] ?: 0) ?: null,trim((string)$_POST['session_date']),trim((string)$_POST['session_type']),trim((string)$_POST['summary']),trim((string)$_POST['recommendations']),trim((string)$_POST['follow_up_date']),trim((string)$_POST['follow_up_status']), (int)$user['id']]);
                 $message='تمت إضافة جلسة الإرشاد والمتابعة';
+            }
+        } elseif ($action === 'exam_calendar_save') {
+            if (!canManage($user)) {
+                $error='الإعداد الامتحاني للمدير والمعاون فقط';
+            } else {
+                $pdo->prepare('INSERT OR REPLACE INTO exam_calendars (academic_year,stage,grade_name,period_name,exam_round,study_type,start_date,end_date,result_date,active,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+                    ->execute([trim((string)$_POST['academic_year']),trim((string)$_POST['stage']),trim((string)$_POST['grade_name']),trim((string)$_POST['period_name']),trim((string)$_POST['exam_round']),trim((string)$_POST['study_type']),trim((string)$_POST['start_date']),trim((string)$_POST['end_date']),trim((string)$_POST['result_date']),1,(int)$user['id']]);
+                $message='تم حفظ جدول الامتحانات والتواريخ';
+            }
+        } elseif ($action === 'grade_policy_save') {
+            if (!canManage($user)) {
+                $error='سياسة الدرجات للمدير والمعاون فقط';
+            } else {
+                $weights=[(float)$_POST['daily_weight'],(float)$_POST['monthly_weight'],(float)$_POST['midterm_weight'],(float)$_POST['final_weight']];
+                if (array_sum($weights)!==100.0) {
+                    $error='مجموع الأوزان يجب أن يكون 100%';
+                } else {
+                    $pdo->prepare('INSERT OR REPLACE INTO grade_policies (academic_year,stage,grade_name,period_name,daily_weight,monthly_weight,midterm_weight,final_weight,pass_score,final_max_score,active,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+                        ->execute([trim((string)$_POST['academic_year']),trim((string)$_POST['stage']),trim((string)$_POST['grade_name']),trim((string)$_POST['period_name']),$weights[0],$weights[1],$weights[2],$weights[3],(float)$_POST['pass_score'],(float)$_POST['final_max_score'],1,(int)$user['id']]);
+                    $message='تم حفظ سياسة احتساب الدرجات';
+                }
+            }
+        } elseif ($action === 'final_result_save') {
+            if (!canManage($user) && $user['role']!== 'معاون') {
+                $error='اعتماد النتيجة النهائية للإدارة فقط';
+            } else {
+                $studentId=(int)$_POST['student_id']; $subjectId=(int)$_POST['subject_id'];
+                $academicYear=trim((string)$_POST['academic_year']); $period=trim((string)$_POST['period_name']); $round=trim((string)$_POST['exam_round']); $studyType=trim((string)$_POST['study_type']);
+                $daily=(float)$_POST['daily_score']; $monthly=(float)$_POST['monthly_score']; $midterm=(float)$_POST['midterm_score']; $final=(float)$_POST['final_score'];
+                $policy=$pdo->prepare('SELECT * FROM grade_policies WHERE academic_year=? AND period_name=? AND active=1 LIMIT 1');
+                $policy->execute([$academicYear,$period]); $p=$policy->fetch();
+                $weights=$p?[(float)$p['daily_weight'],(float)$p['monthly_weight'],(float)$p['midterm_weight'],(float)$p['final_weight']]:[20,20,20,40];
+                $pass=$p?(float)$p['pass_score']:50;
+                $calculated=$daily*$weights[0]/100+$monthly*$weights[1]/100+$midterm*$weights[2]/100+$final*$weights[3]/100;
+                $status=$calculated>= $pass?'ناجح':'راسب';
+                $pdo->prepare('INSERT OR REPLACE INTO final_results (student_id,subject_id,academic_year,period_name,exam_round,study_type,daily_score,monthly_score,midterm_score,final_score,calculated_score,result_status,result_date,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+                    ->execute([$studentId,$subjectId,$academicYear,$period,$round,$studyType,$daily,$monthly,$midterm,$final,$calculated,$status,(string)$_POST['result_date'],(int)$user['id']]);
+                $message='تم اعتماد النتيجة النهائية: '.$status;
             }
         } elseif ($action === 'backup_export') {
             $password = (string)$_POST['backup_password'];
@@ -700,6 +739,7 @@ if ($page === 'login' && $error === '') {
                         <label>رقم القيد المدرسي<input name="enrollment_number"></label>
                         <label>تاريخ الميلاد<input name="birth_date" type="date"></label>
                         <label>الجنس<select name="gender"><option value="">غير محدد</option><option>ذكر</option><option>أنثى</option></select></label>
+                        <label>الالتحاق<select name="study_type"><option>صباحي نظامي</option><option>مسائي نظامي</option><option>انتساب</option><option>متفرغ</option></select></label>
                         <label>الصف<select name="class_id"><?php foreach($pdo->query('SELECT * FROM classes') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name'].' - شعب '.$row['section']) ?></option><?php endforeach ?></select></label>
                         <label>اسم ولي الأمر<input name="guardian_name"></label>
                         <label>هاتف ولي الأمر<input name="guardian_phone"></label>
@@ -770,6 +810,10 @@ if ($page === 'login' && $error === '') {
                     <label>المادة<select name="subject_id"><?php foreach($pdo->query('SELECT * FROM subjects') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name']) ?></option><?php endforeach ?></select></label>
                     <label>الفصل الدراسي<select name="term"><option>الفصل الأول</option><option>الفصل الثاني</option><option>امتحان شامل</option></select></label>
                     <label>نوع التقييم<select name="assessment_type"><option>شهري</option><option>أسبوعي</option><option>عملي</option><option>تحريري</option><option>نصف السنة</option><option>امتحان نهاية الفصل</option><option>امتحان الكورس</option></select></label>
+                    <label>الفترة المعتمدة<select name="period_name"><option>التقييم اليومي والشهري</option><option>نصف السنة</option><option>الفصل الأول</option><option>الفصل الثاني</option><option>الدرجات النهائية</option><option>الدور الأول</option><option>الدور الثاني</option><option>الدور الثالث</option></select></label>
+                    <label>الدور<select name="exam_round"><option>لا ينطبق</option><option>الدور الأول</option><option>الدور الثاني</option><option>الدور الثالث</option></select></label>
+                    <label>الالتحاق<select name="study_type"><option>صباحي نظامي</option><option>مسائي نظامي</option><option>انتساب</option><option>متفرغ</option></select></label>
+                    <label>السنة الدراسية<input name="academic_year" value="<?= date('Y') ?>-<?= date('Y')+1 ?>" required></label>
                     <label>الدرجة<input name="score" type="number" step="0.01" min="0" required></label>
                     <label>الدرجة العظمى<input name="max_score" type="number" step="0.01" min="1" value="100"></label><label>التاريخ<input name="date" type="date" value="<?= date('Y-m-d') ?>"></label>
                     <label>ملاحظة<input name="note"></label><button class="btn primary">حفظ الدرجة</button>
@@ -778,6 +822,66 @@ if ($page === 'login' && $error === '') {
                 <?php foreach($pdo->query('SELECT g.*,s.full_name student_name,j.name subject_name FROM grades g JOIN students s ON s.id=g.student_id JOIN subjects j ON j.id=g.subject_id ORDER BY g.id DESC') as $row): ?><tr><td><?= e($row['student_name']) ?></td><td><?= e($row['subject_name']) ?></td><td><?= e((string)($row['term'] ?? '').' — '.$row['type']) ?></td><td><?= e((string)$row['score'].' / '.(string)$row['max_score']) ?></td><td><?= e($row['date']) ?></td></tr><?php endforeach ?>
                 </tbody></table></div>
             </div>
+            <?php if (canManage($user)): ?>
+                <div class="panel">
+                    <details open>
+                        <summary>جدول الامتحانات والتواريخ الوزارية</summary>
+                        <form method="post" class="form-grid">
+                            <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="exam_calendar_save">
+                            <label>السنة الدراسية<input name="academic_year" value="<?= date('Y') ?>-<?= date('Y')+1 ?>" required></label>
+                            <label>المرحلة<select name="stage"><option>روضة</option><option>ابتدائي</option><option>متوسط</option><option>إعدادي</option></select></label>
+                            <label>الصف<select name="grade_name"><option>الأول ابتدائي</option><option>الثاني ابتدائي</option><option>الثالث ابتدائي</option><option>الرابع ابتدائي</option><option>الخامس ابتدائي</option><option>السادس ابتدائي</option><option>الأول متوسط</option><option>الثاني متوسط</option><option>الثالث متوسط</option><option>الرابع إعدادي</option><option>الخامس إعدادي</option><option>السادس إعدادي</option></select></label>
+                            <label>الفترة<select name="period_name"><option>الفصل الأول</option><option>نصف السنة</option><option>الفصل الثاني</option><option>الدرجات النهائية</option></select></label>
+                            <label>الدور<select name="exam_round"><option>الدور الأول</option><option>الدور الثاني</option><option>الدور الثالث</option></select></label>
+                            <label>الالتحاق<select name="study_type"><option>صباحي نظامي</option><option>مسائي نظامي</option><option>انتساب</option><option>متفرغ</option></select></label>
+                            <label>تاريخ البدء<input name="start_date" type="date"></label>
+                            <label>تاريخ الانتهاء<input name="end_date" type="date"></label>
+                            <label>تاريخ النتيجة<input name="result_date" type="date"></label>
+                            <button class="btn primary">حفظ جدول الامتحانات</button>
+                        </form>
+                    </details>
+                    <details open>
+                        <summary>أوزان الدرجات وعامل النجاح</summary>
+                        <form method="post" class="form-grid">
+                            <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="grade_policy_save">
+                            <label>السنة الدراسية<input name="academic_year" value="<?= date('Y') ?>-<?= date('Y')+1 ?>" required></label>
+                            <label>المرحلة<select name="stage"><option>ابتدائي</option><option>متوسط</option><option>إعدادي</option></select></label>
+                            <label>الصف<input name="grade_name" value="الصف الخامس ابتدائي" required></label>
+                            <label>الفترة<select name="period_name"><option>الفصل الأول</option><option>نصف السنة</option><option>الفصل الثاني</option><option>الدرجات النهائية</option></select></label>
+                            <label>وزن اليومي %<input name="daily_weight" type="number" min="0" max="100" value="20" required></label>
+                            <label>وزن الشهري %<input name="monthly_weight" type="number" min="0" max="100" value="20" required></label>
+                            <label>وزن نصف السنة %<input name="midterm_weight" type="number" min="0" max="100" value="20" required></label>
+                            <label>وزن الامتحان النهائي %<input name="final_weight" type="number" min="0" max="100" value="40" required></label>
+                            <label>درجة النجاح<input name="pass_score" type="number" min="0" max="100" value="50" required></label>
+                            <label>الدرجة النهائية العظمى<input name="final_max_score" type="number" min="1" value="100" required></label>
+                            <button class="btn primary">حفظ سياسة الدرجات</button>
+                        </form>
+                    </details>
+                    <details open>
+                        <summary>اعتماد النتيجة النهائية</summary>
+                        <form method="post" class="form-grid">
+                            <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="final_result_save">
+                            <label>الطالب<select name="student_id" required><?php foreach($pdo->query('SELECT id,full_name FROM students WHERE active=1 ORDER BY full_name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option><?php endforeach ?></select></label>
+                            <label>المادة<select name="subject_id" required><?php foreach($pdo->query('SELECT id,name FROM subjects ORDER BY name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name']) ?></option><?php endforeach ?></select></label>
+                            <label>السنة الدراسية<input name="academic_year" value="<?= date('Y') ?>-<?= date('Y')+1 ?>" required></label>
+                            <label>الفترة<select name="period_name"><option>الفصل الأول</option><option>نصف السنة</option><option>الفصل الثاني</option><option>الدرجات النهائية</option></select></label>
+                            <label>الدور<select name="exam_round"><option>الدور الأول</option><option>الدور الثاني</option><option>الدور الثالث</option></select></label>
+                            <label>الالتحاق<select name="study_type"><option>صباحي نظامي</option><option>مسائي نظامي</option><option>انتساب</option><option>متفرغ</option></select></label>
+                            <label>درجة اليومي<input name="daily_score" type="number" min="0" step="0.01" value="0"></label>
+                            <label>درجة الشهري<input name="monthly_score" type="number" min="0" step="0.01" value="0"></label>
+                            <label>درجة نصف السنة<input name="midterm_score" type="number" min="0" step="0.01" value="0"></label>
+                            <label>درجة الامتحان النهائي<input name="final_score" type="number" min="0" step="0.01" value="0"></label>
+                            <label>تاريخ النتيجة<input name="result_date" type="date" value="<?= date('Y-m-d') ?>"></label>
+                            <button class="btn primary">حساب واعتماد النتيجة</button>
+                        </form>
+                    </details>
+                    <div class="table-wrap"><table><thead><tr><th>الطالب</th><th>المادة</th><th>الفترة والدور</th><th>الالتحاق</th><th>الدرجة المحسوبة</th><th>النتيجة</th></tr></thead><tbody>
+                    <?php foreach($pdo->query('SELECT r.*,s.full_name student_name,j.name subject_name FROM final_results r LEFT JOIN students s ON s.id=r.student_id LEFT JOIN subjects j ON j.id=r.subject_id ORDER BY r.id DESC') as $row): ?>
+                        <tr><td><?= e($row['student_name']) ?></td><td><?= e((string)$row['subject_name']) ?></td><td><?= e($row['period_name'].' — '.$row['exam_round']) ?></td><td><?= e($row['study_type']) ?></td><td><?= number_format((float)$row['calculated_score'],2) ?></td><td><span class="badge <?= $row['result_status']==='ناجح'?'success':'danger' ?>"><?= e($row['result_status']) ?></span></td></tr>
+                    <?php endforeach ?>
+                    </tbody></table></div>
+                </div>
+            <?php endif ?>
         <?php elseif ($page === 'accounting' && canAccounting($user)): ?>
             <div class="stat-grid accounting-stats">
                 <article class="stat-card"><span>إجمالي المقبوضات</span><strong><?= formatIQD((float)$pdo->query('SELECT COALESCE(SUM(amount),0) FROM payments')->fetchColumn()) ?></strong></article>
