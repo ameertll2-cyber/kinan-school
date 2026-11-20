@@ -83,6 +83,56 @@ function db(): PDO {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS fee_types (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            amount REAL NOT NULL DEFAULT 0,
+            academic_year TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS invoices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_number TEXT NOT NULL UNIQUE,
+            student_id INTEGER NOT NULL,
+            academic_year TEXT NOT NULL,
+            due_date TEXT,
+            discount REAL NOT NULL DEFAULT 0,
+            note TEXT,
+            status TEXT NOT NULL DEFAULT 'غير مدفوع',
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS invoice_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_id INTEGER NOT NULL,
+            fee_type_id INTEGER,
+            description TEXT NOT NULL,
+            amount REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            receipt_number TEXT NOT NULL UNIQUE,
+            invoice_id INTEGER NOT NULL,
+            student_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            method TEXT NOT NULL CHECK(method IN ('نقدي','تحويل بنكي','بطاقة')),
+            paid_at TEXT NOT NULL,
+            note TEXT,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT NOT NULL,
+            description TEXT NOT NULL,
+            amount REAL NOT NULL,
+            expense_date TEXT NOT NULL,
+            receipt_ref TEXT,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
     ");
 
     seedDemoData($pdo);
@@ -135,5 +185,21 @@ function seedDemoData(PDO $pdo): void {
         $pdo->exec("INSERT INTO staff (full_name, job_title, phone, email) VALUES
             ('أحمد محمود', 'مدرس رياضيات', '07700000101', 'ahmad@example.edu.iq'),
             ('نورا سامي', 'مديرة شعبة', '07700000102', 'nora@example.edu.iq')");
+    }
+
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM fee_types")->fetchColumn();
+    if ($count === 0) {
+        $pdo->exec("INSERT INTO fee_types (name, amount, academic_year) VALUES
+            ('الرسوم الدراسية', 750000, '2026-2027'),
+            ('رسوم النقل', 150000, '2026-2027'),
+            ('الأنشطة والرياضة', 50000, '2026-2027')");
+    }
+
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM invoices")->fetchColumn();
+    if ($count === 0) {
+        $pdo->exec("INSERT INTO invoices (invoice_number, student_id, academic_year, due_date, discount, note, status, created_by)
+            VALUES ('INV-2026-0001', 1, '2026-2027', '2026-12-01', 0, 'رسوم تجريبية', 'غير مدفوع', 1)");
+        $pdo->exec("INSERT INTO invoice_items (invoice_id, fee_type_id, description, amount)
+            VALUES (1, 1, 'الرسوم الدراسية', 750000), (1, 3, 'الأنشطة والرياضة', 50000)");
     }
 }

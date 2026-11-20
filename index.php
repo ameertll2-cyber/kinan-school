@@ -37,8 +37,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $user = requireLogin();
 
-        if (!canManage($user) && $action !== 'attendance_save' && $action !== 'grade_save') {
+        $accountingActions = ['fee_type_save','invoice_save','payment_save','expense_save'];
+        if (!canManage($user) && $action !== 'attendance_save' && $action !== 'grade_save'
+            && !in_array($action, $accountingActions, true)) {
             $error = 'ليست لديك صلاحية تنفيذ هذا الإجراء';
+        } elseif (in_array($action, $accountingActions, true) && !canAccounting($user)) {
+            $error = 'ليست لديك صلاحية تنفيذ الإجراء المحاسبي';
         } elseif ($action === 'student_save') {
             $pdo->prepare('INSERT INTO students (full_name,national_id,class_id,guardian_name,guardian_phone,address) VALUES (?,?,?,?,?,?)')
                 ->execute([trim((string)$_POST['full_name']), trim((string)$_POST['national_id']), (int)$_POST['class_id'], trim((string)$_POST['guardian_name']), trim((string)$_POST['guardian_phone']), trim((string)$_POST['address'])]);
@@ -55,6 +59,82 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->prepare('INSERT INTO subjects (name,code,class_id) VALUES (?,?,?)')
                 ->execute([trim((string)$_POST['name']), trim((string)$_POST['code']), (int)$_POST['class_id']]);
             $message = 'تمت إضافة المادة';
+        } elseif ($action === 'fee_type_save') {
+            $amount = (float)$_POST['amount'];
+            if (trim((string)$_POST['name']) === '' || $amount < 0) {
+                $error = 'أدخل اسم ورسماً صحيحين';
+            } else {
+                $pdo->prepare('INSERT INTO fee_types (name,amount,academic_year) VALUES (?,?,?)')
+                    ->execute([trim((string)$_POST['name']), $amount, trim((string)$_POST['academic_year'])]);
+                $message = 'تمت إضافة نوع الرسم';
+            }
+        } elseif ($action === 'invoice_save') {
+            $studentId = (int)$_POST['student_id'];
+            $feeIds = array_map('intval', (array)($_POST['fee_type_ids'] ?? []));
+            $discount = max(0, (float)$_POST['discount']);
+            if (!$studentId || empty($feeIds)) {
+                $error = 'اختر الطالب ونوع رسم واحد على الأقل';
+            } else {
+                $pdo->beginTransaction();
+                try {
+                    $year = trim((string)$_POST['academic_year']);
+                    $invoiceNumber = 'INV-' . date('Y') . '-' . str_pad((string)($pdo->query('SELECT COUNT(*)+1 FROM invoices')->fetchColumn()), 4, '0', STR_PAD_LEFT);
+                    $pdo->prepare('INSERT INTO invoices (invoice_number,student_id,academic_year,due_date,discount,note,status,created_by) VALUES (?,?,?,?,?,?,?,?)')
+                        ->execute([$invoiceNumber, $studentId, $year, trim((string)$_POST['due_date']), $discount, trim((string)$_POST['note']), 'غير مدفوع', (int)$user['id']]);
+                    $invoiceId = (int)$pdo->lastInsertId();
+                    $feeStmt = $pdo->prepare('SELECT name,amount FROM fee_types WHERE id=? AND active=1');
+                    $itemStmt = $pdo->prepare('INSERT INTO invoice_items (invoice_id,fee_type_id,description,amount) VALUES (?,?,?,?)');
+                    foreach ($feeIds as $feeId) {
+                        $feeStmt->execute([$feeId]);
+                        $fee = $feeStmt->fetch();
+                        if ($fee) {
+                            $itemStmt->execute([$invoiceId, $feeId, $fee['name'], (float)$fee['amount']]);
+                        }
+                    }
+                    $pdo->commit();
+                    $message = 'تم إنشاء الفاتورة ' . $invoiceNumber;
+                } catch (Throwable $e) {
+                    $pdo->rollBack();
+                    $error = 'تعذر إنشاء الفاتورة';
+                }
+            }
+        } elseif ($action === 'payment_save') {
+            $invoiceId = (int)$_POST['invoice_id'];
+            $amount = (float)$_POST['amount'];
+            if (!$invoiceId || $amount <= 0) {
+                $error = 'أدخل فاتورة ومبلغاً صحيحين';
+            } else {
+                $invoiceStmt = $pdo->prepare('SELECT student_id FROM invoices WHERE id=?');
+                $invoiceStmt->execute([$invoiceId]);
+                $studentId = $invoiceStmt->fetchColumn();
+                if (!$studentId) {
+                    $error = 'الفاتورة غير موجودة';
+                } else {
+                    $balance = max(0, invoiceTotal($pdo, $invoiceId) - invoicePaid($pdo, $invoiceId));
+                    if ($amount > $balance) {
+                        $error = 'المبلغ أكبر من المتبقي على الفاتورة: ' . formatIQD($balance);
+                    } else {
+                    $receiptNumber = 'REC-' . date('Y') . '-' . str_pad((string)($pdo->query('SELECT COUNT(*)+1 FROM payments')->fetchColumn()), 5, '0', STR_PAD_LEFT);
+                    $pdo->prepare('INSERT INTO payments (receipt_number,invoice_id,student_id,amount,method,paid_at,note,created_by) VALUES (?,?,?,?,?,?,?,?)')
+                        ->execute([$receiptNumber, $invoiceId, (int)$studentId, $amount, (string)$_POST['method'], trim((string)$_POST['paid_at']), trim((string)$_POST['note']), (int)$user['id']]);
+                    $total = (float)$pdo->query("SELECT COALESCE(SUM(amount),0) FROM invoice_items WHERE invoice_id=$invoiceId")->fetchColumn();
+                    $discount = (float)$pdo->query("SELECT discount FROM invoices WHERE id=$invoiceId")->fetchColumn();
+                    $paid = (float)$pdo->query("SELECT COALESCE(SUM(amount),0) FROM payments WHERE invoice_id=$invoiceId")->fetchColumn();
+                    $status = $paid >= max(0, $total - $discount) ? 'مدفوعة بالكامل' : 'مدفوعة جزئيًا';
+                    $pdo->prepare('UPDATE invoices SET status=? WHERE id=?')->execute([$status, $invoiceId]);
+                    $message = 'تم تسجيل الدفع وإصدار إيصال ' . $receiptNumber;
+                    }
+                }
+            }
+        } elseif ($action === 'expense_save') {
+            $amount = (float)$_POST['amount'];
+            if (trim((string)$_POST['description']) === '' || $amount <= 0) {
+                $error = 'أدخل وصف المصروف ومبلغه';
+            } else {
+                $pdo->prepare('INSERT INTO expenses (category,description,amount,expense_date,receipt_ref,created_by) VALUES (?,?,?,?,?,?)')
+                    ->execute([trim((string)$_POST['category']), trim((string)$_POST['description']), $amount, trim((string)$_POST['expense_date']), trim((string)$_POST['receipt_ref']), (int)$user['id']]);
+                $message = 'تمت إضافة المصروف';
+            }
         } elseif ($action === 'attendance_save') {
             $stmt = $pdo->prepare('INSERT INTO attendance (student_id,date,status,note) VALUES (?,?,?,?)
                 ON CONFLICT(student_id,date) DO UPDATE SET status=excluded.status,note=excluded.note');
@@ -123,6 +203,20 @@ function roleBadge(string $role): string {
     return '<span class="badge ' . ($classes[$role] ?? 'neutral') . '">' . e($role) . '</span>';
 }
 
+function invoiceTotal(PDO $pdo, int $invoiceId): float {
+    $items = (float)$pdo->query("SELECT COALESCE(SUM(amount),0) FROM invoice_items WHERE invoice_id=$invoiceId")->fetchColumn();
+    $discount = (float)$pdo->query("SELECT discount FROM invoices WHERE id=$invoiceId")->fetchColumn();
+    return max(0, $items - $discount);
+}
+
+function invoicePaid(PDO $pdo, int $invoiceId): float {
+    return (float)$pdo->query("SELECT COALESCE(SUM(amount),0) FROM payments WHERE invoice_id=$invoiceId")->fetchColumn();
+}
+
+function formatIQD(float $amount): string {
+    return number_format($amount, 0, '.', ',') . ' د.ع';
+}
+
 $title = 'كِنان';
 if ($page === 'login' && $error === '') {
     $error = isset($_GET['required']) ? 'سجل الدخول للمتابعة' : '';
@@ -176,6 +270,9 @@ if ($page === 'login' && $error === '') {
             <?php if (canManage($user)): ?>
                 <a class="<?= $page==='backup'?'active':'' ?>" href="?page=backup"><span>↧</span> النسخ الاحتياطية</a>
             <?php endif ?>
+            <?php if (canAccounting($user)): ?>
+                <a class="<?= $page==='accounting'?'active':'' ?>" href="?page=accounting"><span>د.ع</span> المحاسبة والرسوم</a>
+            <?php endif ?>
         </nav>
         <div class="sidebar-user">
             <strong><?= e($user['name']) ?></strong>
@@ -194,7 +291,7 @@ if ($page === 'login' && $error === '') {
                 <h1><?= e([
                     'dashboard'=>'لوحة التحكم','students'=>'إدارة الطلبة','staff'=>'الكادر التدريسي',
                     'classes'=>'الصفوف والشعب','subjects'=>'المواد الدراسية','attendance'=>'الحضور والغياب',
-                    'grades'=>'سجل الدرجات','backup'=>'النسخ الاحتياطية'
+                    'grades'=>'سجل الدرجات','backup'=>'النسخ الاحتياطية','accounting'=>'المحاسبة والرسوم'
                ][$page] ?? 'كِنان') ?></h1>
             </div>
         </header>
@@ -208,6 +305,13 @@ if ($page === 'login' && $error === '') {
                 <article class="stat-card"><span>الصفوف</span><strong><?= (int)$pdo->query('SELECT COUNT(*) FROM classes')->fetchColumn() ?></strong></article>
                 <article class="stat-card"><span>المواد</span><strong><?= (int)$pdo->query('SELECT COUNT(*) FROM subjects')->fetchColumn() ?></strong></article>
             </div>
+            <?php if (canAccounting($user)): ?>
+                <div class="stat-grid accounting-stats">
+                    <article class="stat-card"><span>إجمالي المدفوعات</span><strong><?= formatIQD((float)$pdo->query('SELECT COALESCE(SUM(amount),0) FROM payments')->fetchColumn()) ?></strong></article>
+                    <article class="stat-card"><span>إجمالي المصروفات</span><strong><?= formatIQD((float)$pdo->query('SELECT COALESCE(SUM(amount),0) FROM expenses')->fetchColumn()) ?></strong></article>
+                    <article class="stat-card"><span>الفواتير غير المسددة</span><strong><?= (int)$pdo->query("SELECT COUNT(*) FROM invoices WHERE status!='مدفوعة بالكامل'")->fetchColumn() ?></strong></article>
+                </div>
+            <?php endif ?>
             <div class="panel">
                 <h2>مرحبًا <?= e($user['name']) ?></h2>
                 <p>هذه المرحلة الأولى جاهزة لإدارة بيانات المدرسة الأساسية والحضور والدرجات.</p>
@@ -294,6 +398,99 @@ if ($page === 'login' && $error === '') {
                 </form></details>
                 <div class="table-wrap"><table><thead><tr><th>الطالب</th><th>المادة</th><th>التقييم</th><th>الدرجة</th><th>التاريخ</th></tr></thead><tbody>
                 <?php foreach($pdo->query('SELECT g.*,s.full_name student_name,j.name subject_name FROM grades g JOIN students s ON s.id=g.student_id JOIN subjects j ON j.id=g.subject_id ORDER BY g.id DESC') as $row): ?><tr><td><?= e($row['student_name']) ?></td><td><?= e($row['subject_name']) ?></td><td><?= e($row['type']) ?></td><td><?= e((string)$row['score'].' / '.(string)$row['max_score']) ?></td><td><?= e($row['date']) ?></td></tr><?php endforeach ?>
+                </tbody></table></div>
+            </div>
+        <?php elseif ($page === 'accounting' && canAccounting($user)): ?>
+            <div class="stat-grid accounting-stats">
+                <article class="stat-card"><span>إجمالي المقبوضات</span><strong><?= formatIQD((float)$pdo->query('SELECT COALESCE(SUM(amount),0) FROM payments')->fetchColumn()) ?></strong></article>
+                <article class="stat-card"><span>إجمالي المصروفات</span><strong><?= formatIQD((float)$pdo->query('SELECT COALESCE(SUM(amount),0) FROM expenses')->fetchColumn()) ?></strong></article>
+                <article class="stat-card"><span>الرصيد النقدي</span><strong><?= formatIQD((float)$pdo->query('SELECT COALESCE(SUM(amount),0) FROM payments')->fetchColumn() - (float)$pdo->query('SELECT COALESCE(SUM(amount),0) FROM expenses')->fetchColumn()) ?></strong></article>
+            </div>
+            <div class="accounting-tabs">
+                <details open>
+                    <summary>أنواع الرسوم</summary>
+                    <form method="post" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="fee_type_save">
+                        <label>اسم الرسم<input name="name" required></label>
+                        <label>المبلغ بالدينار العراقي<input name="amount" type="number" min="0" step="250" required></label>
+                        <label>السنة الدراسية<input name="academic_year" value="2026-2027" required></label>
+                        <button class="btn primary">حفظ نوع الرسم</button>
+                    </form>
+                    <div class="table-wrap"><table><thead><tr><th>الرسم</th><th>المبلغ</th><th>السنة</th></tr></thead><tbody>
+                    <?php foreach($pdo->query('SELECT * FROM fee_types WHERE active=1 ORDER BY id') as $row): ?>
+                        <tr><td><?= e($row['name']) ?></td><td><?= formatIQD((float)$row['amount']) ?></td><td><?= e($row['academic_year']) ?></td></tr>
+                    <?php endforeach ?>
+                    </tbody></table></div>
+                </details>
+                <details open>
+                    <summary>إنشاء فاتورة طالب</summary>
+                    <form method="post" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="invoice_save">
+                        <label>الطالب
+                            <select name="student_id" required><option value="">اختر الطالب</option><?php foreach($pdo->query('SELECT * FROM students WHERE active=1 ORDER BY full_name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option><?php endforeach ?></select>
+                        </label>
+                        <label>السنة الدراسية<input name="academic_year" value="2026-2027" required></label>
+                        <fieldset class="fee-picker"><legend>الرسوم</legend>
+                            <?php foreach($pdo->query('SELECT * FROM fee_types WHERE active=1 ORDER BY id') as $row): ?>
+                                <label class="check-line"><input type="checkbox" name="fee_type_ids[]" value="<?= $row['id'] ?>"> <span><?= e($row['name']) ?> — <?= formatIQD((float)$row['amount']) ?></span></label>
+                            <?php endforeach ?>
+                        </fieldset>
+                        <label>الخصم بالدينار العراقي<input name="discount" type="number" min="0" step="250" value="0"></label>
+                        <label>تاريخ الاستحقاق<input name="due_date" type="date" value="<?= date('Y-m-d') ?>"></label>
+                        <label>ملاحظة<input name="note"></label>
+                        <button class="btn primary">إنشاء الفاتورة</button>
+                    </form>
+                </details>
+                <details open>
+                    <summary>تسجيل دفعة وإيصال</summary>
+                    <form method="post" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="payment_save">
+                        <label>الفاتورة
+                            <select name="invoice_id" required><option value="">اختر الفاتورة</option><?php foreach($pdo->query('SELECT i.*,s.full_name FROM invoices i JOIN students s ON s.id=i.student_id ORDER BY i.id DESC') as $row): ?>
+                                <option value="<?= $row['id'] ?>"><?= e($row['invoice_number'].' - '.$row['full_name'].' - '.formatIQD(max(0,invoiceTotal($pdo,(int)$row['id'])-invoicePaid($pdo,(int)$row['id'])))) ?></option>
+                            <?php endforeach ?></select>
+                        </label>
+                        <label>المبلغ المدفوع<input name="amount" type="number" min="1" step="250" required></label>
+                        <label>طريقة الدفع<select name="method"><option>نقدي</option><option>تحويل بنكي</option><option>بطاقة</option></select></label>
+                        <label>تاريخ الدفع<input name="paid_at" type="date" value="<?= date('Y-m-d') ?>"></label>
+                        <label>ملاحظة<input name="note"></label>
+                        <button class="btn primary">حفظ الدفعة</button>
+                    </form>
+                </details>
+                <details open>
+                    <summary>تسجيل مصروف</summary>
+                    <form method="post" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="expense_save">
+                        <label>الفئة<input name="category" value="مشتريات مدرسية" required></label>
+                        <label>الوصف<input name="description" required></label>
+                        <label>المبلغ بالدينار العراقي<input name="amount" type="number" min="1" step="250" required></label>
+                        <label>التاريخ<input name="expense_date" type="date" value="<?= date('Y-m-d') ?>"></label>
+                        <label>رقم الإشعار أو الفاتورة<input name="receipt_ref"></label>
+                        <button class="btn primary">حفظ المصروف</button>
+                    </form>
+                </details>
+            </div>
+            <div class="panel">
+                <h2>الفواتير والإيصالات</h2>
+                <div class="table-wrap"><table><thead><tr><th>رقم الفاتورة</th><th>الطالب</th><th>الإجمالي</th><th>مدفوع</th><th>المتبقي</th><th>الحالة</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT i.*,s.full_name FROM invoices i JOIN students s ON s.id=i.student_id ORDER BY i.id DESC') as $row):
+                    $total=invoiceTotal($pdo,(int)$row['id']); $paid=invoicePaid($pdo,(int)$row['id']); $remaining=max(0,$total-$paid);
+                ?>
+                    <tr><td><?= e($row['invoice_number']) ?></td><td><?= e($row['full_name']) ?></td><td><?= formatIQD($total) ?></td><td><?= formatIQD($paid) ?></td><td><?= formatIQD($remaining) ?></td><td><span class="badge <?= $remaining<=0?'success':'warning' ?>"><?= e($row['status']) ?></span></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+            </div>
+            <div class="panel">
+                <h2>آخر الدفعات والمصروفات</h2>
+                <div class="table-wrap"><table><thead><tr><th>النوع</th><th>المرجع</th><th>الوصف</th><th>المبلغ</th><th>التاريخ</th></tr></thead><tbody>
+                <?php
+                foreach($pdo->query('SELECT p.*,s.full_name FROM payments p JOIN students s ON s.id=p.student_id ORDER BY p.id DESC LIMIT 20') as $row):
+                    ?><tr><td>قبض</td><td><?= e($row['receipt_number']) ?></td><td><?= e($row['full_name'].' - '.$row['method']) ?></td><td><?= formatIQD((float)$row['amount']) ?></td><td><?= e($row['paid_at']) ?></td></tr><?php
+                endforeach;
+                foreach($pdo->query('SELECT * FROM expenses ORDER BY expense_date DESC,id DESC LIMIT 20') as $row):
+                    ?><tr><td>مصروف</td><td><?= e((string)$row['receipt_ref']) ?></td><td><?= e($row['category'].' - '.$row['description']) ?></td><td><?= formatIQD((float)$row['amount']) ?></td><td><?= e($row['expense_date']) ?></td></tr><?php
+                endforeach;
+                ?>
                 </tbody></table></div>
             </div>
         <?php elseif ($page === 'backup' && canManage($user)): ?>

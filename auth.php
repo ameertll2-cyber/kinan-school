@@ -35,3 +35,7 @@ function requireLogin(): array {
 function canManage(array $user): bool {
     return in_array($user['role'], ['مدير', 'معاون'], true);
 }
+
+function canAccounting(array $user): bool {
+    return in_array($user['role'], ['مدير', 'معاون', 'محاسب'], true);
+}
