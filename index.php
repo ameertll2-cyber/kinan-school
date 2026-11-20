@@ -126,20 +126,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string)($_POST['action'] ?? '');
 
     if ($action === 'login') {
-        $stmt = $pdo->prepare('SELECT id,name,username,role,active FROM users WHERE username = ? AND active = 1');
-        $stmt->execute([(string)$_POST['username']]);
+        $loginUsername=trim((string)$_POST['username']);
+        $ip=$_SERVER['REMOTE_ADDR'] ?? '';
+        $stmt = $pdo->prepare('SELECT id,name,username,role,active,failed_attempts,locked_until,password_hash FROM users WHERE username = ?');
+        $stmt->execute([$loginUsername]);
         $user = $stmt->fetch();
-        $hashStmt = $pdo->prepare('SELECT password_hash FROM users WHERE username = ?');
-        $hashStmt->execute([(string)$_POST['username']]);
-        $hash = $hashStmt->fetchColumn();
-        if ($user && is_string($hash) && password_verify((string)$_POST['password'], $hash)) {
+        $locked=$user && !empty($user['locked_until']) && strtotime((string)$user['locked_until'])>time();
+        $hash=$user['password_hash'] ?? null;
+        if ($locked) {
+            $pdo->prepare('INSERT INTO login_attempts (username,ip_address,successful) VALUES (?,?,0)')
+                ->execute([$loginUsername,$ip]);
+            $error='الحساب مقفل مؤقتًا بسبب محاولات الدخول المتكررة';
+            $page='login';
+        } elseif ($user && (int)$user['active']===1 && is_string($hash) && password_verify((string)$_POST['password'], $hash)) {
+            $pdo->prepare('UPDATE users SET failed_attempts=0,locked_until=NULL WHERE id=?')->execute([(int)$user['id']]);
+            $pdo->prepare('INSERT INTO login_attempts (username,ip_address,successful) VALUES (?,?,1)')
+                ->execute([$loginUsername,$ip]);
             session_regenerate_id(true);
             $_SESSION['user'] = $user;
             header('Location: ?page=dashboard');
             exit;
+        } else {
+            if ($user) {
+                $attempts=(int)$user['failed_attempts']+1;
+                $lockUntil=$attempts>=5 ? date('Y-m-d H:i:s',time()+15*60) : null;
+                $pdo->prepare('UPDATE users SET failed_attempts=?,locked_until=? WHERE id=?')
+                    ->execute([$attempts,$lockUntil,(int)$user['id']]);
+            }
+            $pdo->prepare('INSERT INTO login_attempts (username,ip_address,successful) VALUES (?,?,0)')
+                ->execute([$loginUsername,$ip]);
+            $error='اسم المستخدم أو كلمة المرور غير صحيحة';
+            $page='login';
         }
-        $error = 'اسم المستخدم أو كلمة المرور غير صحيحة';
-        $page = 'login';
     } elseif ($action === 'logout') {
         session_destroy();
         header('Location: ?page=login');
@@ -150,16 +168,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $accountingActions = ['fee_type_save','invoice_save','payment_save','expense_save'];
         $teacherActions = ['assignment_save','lecture_save'];
         $counselingActions = ['counseling_case_save','behavior_note_save','improvement_plan_save','counseling_session_save'];
+        $securityActions = ['password_change','user_create','user_status_save','user_unlock'];
         if (!canManage($user) && $action !== 'attendance_save' && $action !== 'grade_save'
             && $action !== 'notification_read'
             && !in_array($action, $accountingActions, true)
             && !in_array($action, $teacherActions, true)
-            && !in_array($action, $counselingActions, true)) {
+            && !in_array($action, $counselingActions, true)
+            && !in_array($action, $securityActions, true)) {
             $error = 'ليست لديك صلاحية تنفيذ هذا الإجراء';
         } elseif (in_array($action, $accountingActions, true) && !canAccounting($user)) {
             $error = 'ليست لديك صلاحية تنفيذ الإجراء المحاسبي';
         } elseif (in_array($action, $counselingActions, true) && !canCounsel($user)) {
             $error = 'ليست لديك صلاحية تنفيذ الإجراء التربوي';
+        } elseif (in_array($action, $securityActions, true) && $action === 'password_change') {
+            $current=(string)$_POST['current_password'];
+            $new=(string)$_POST['new_password'];
+            $confirm=(string)$_POST['confirm_password'];
+            $row=$pdo->prepare('SELECT password_hash FROM users WHERE id=?');
+            $row->execute([(int)$user['id']]);
+            $hash=(string)$row->fetchColumn();
+            if (!password_verify($current,$hash)) {
+                $error='كلمة المرور الحالية غير صحيحة';
+            } elseif (strlen($new)<10 || $new!==$confirm) {
+                $error='كلمة المرور الجديدة يجب ألا تقل عن 10 أحرف وأن تتطابق';
+            } else {
+                $pdo->prepare('UPDATE users SET password_hash=?,password_changed_at=?,failed_attempts=0,locked_until=NULL WHERE id=?')
+                    ->execute([password_hash($new,PASSWORD_DEFAULT),date('Y-m-d H:i:s'),(int)$user['id']]);
+                auditLog($pdo,$user,'تغيير كلمة المرور','الحساب',(string)$user['id'],'تم تغيير كلمة المرور من قبل المستخدم');
+                $message='تم تغيير كلمة المرور بنجاح';
+            }
+        } elseif (in_array($action, $securityActions, true) && !canManage($user)) {
+            $error='إدارة الحسابات والصلاحيات متاحة للمدير والمعاون فقط';
+        } elseif ($action === 'user_create') {
+            $name=trim((string)$_POST['name']); $username=trim((string)$_POST['username']); $password=(string)$_POST['password']; $role=(string)$_POST['role'];
+            if ($name===''||$username===''||strlen($password)<10) {
+                $error='أدخل اسمًا واسم مستخدم وكلمة مرور لا تقل عن 10 أحرف';
+            } elseif (!in_array($role,['مدير','معاون','مدرس','محاسب','ولي أمر'],true)) {
+                $error='الدور المحدد غير صالح';
+            } else {
+                try {
+                    $pdo->prepare('INSERT INTO users (name,username,password_hash,role,active,password_changed_at) VALUES (?,?,?,?,1,?)')
+                        ->execute([$name,$username,password_hash($password,PASSWORD_DEFAULT),$role,date('Y-m-d H:i:s')]);
+                    auditLog($pdo,$user,'إنشاء حساب','الحساب',(string)$pdo->lastInsertId(),'تم إنشاء حساب دور '.$role);
+                    $message='تم إنشاء الحساب';
+                } catch (Throwable $e) {
+                    $error='اسم المستخدم مستخدم مسبقًا أو غير صالح';
+                }
+            }
+        } elseif ($action === 'user_status_save') {
+            $userId=(int)$_POST['user_id'];
+            if ($userId && $userId!== (int)$user['id']) {
+                $pdo->prepare('UPDATE users SET active=? WHERE id=?')->execute([isset($_POST['active'])?1:0,$userId]);
+                auditLog($pdo,$user,'تغيير حالة حساب','الحساب',(string)$userId,isset($_POST['active'])?'تم تفعيل الحساب':'تم تعطيل الحساب');
+                $message='تم تحديث حالة الحساب';
+            } else {
+                $error='لا يمكن تعطيل حسابك الحالي';
+            }
+        } elseif ($action === 'user_unlock') {
+            $userId=(int)$_POST['user_id'];
+            if ($userId) {
+                $pdo->prepare('UPDATE users SET failed_attempts=0,locked_until=NULL WHERE id=?')->execute([$userId]);
+                auditLog($pdo,$user,'فك قفل حساب','الحساب',(string)$userId,'تم إعادة ضبط محاولات الدخول');
+                $message='تم فك قفل الحساب';
+            }
         } elseif ($action === 'student_save') {
             $pdo->prepare('INSERT INTO students (full_name,national_id,class_id,guardian_name,guardian_phone,address,birth_date,gender,enrollment_number,study_type) VALUES (?,?,?,?,?,?,?,?,?,?)')
                 ->execute([trim((string)$_POST['full_name']), trim((string)$_POST['national_id']), (int)$_POST['class_id'], trim((string)$_POST['guardian_name']), trim((string)$_POST['guardian_phone']), trim((string)$_POST['address']), trim((string)$_POST['birth_date']), trim((string)$_POST['gender']), trim((string)$_POST['enrollment_number']), trim((string)$_POST['study_type'])]);
@@ -509,6 +580,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $status=$calculated>= $pass?'ناجح':'راسب';
                 $pdo->prepare('INSERT OR REPLACE INTO final_results (student_id,subject_id,academic_year,period_name,exam_round,study_type,daily_score,monthly_score,midterm_score,final_score,calculated_score,result_status,result_date,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
                     ->execute([$studentId,$subjectId,$academicYear,$period,$round,$studyType,$daily,$monthly,$midterm,$final,$calculated,$status,(string)$_POST['result_date'],(int)$user['id']]);
+                auditLog($pdo,$user,'اعتماد نتيجة نهائية','النتيجة',$studentId.'-'.$subjectId,$period.' '.$round.' '.$status.' '.$calculated);
                 $message='تم اعتماد النتيجة النهائية: '.$status;
             }
         } elseif ($action === 'backup_export') {
@@ -517,6 +589,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = 'كلمة مرور النسخة يجب ألا تقل عن 8 أحرف';
             } else {
                 $json = createEncryptedBackup($pdo, $password);
+                auditLog($pdo,$user,'تصدير نسخة احتياطية مشفرة','قاعدة البيانات','','تم إنشاء ملف نسخ مشفر');
                 header('Content-Type: application/json');
                 header('Content-Disposition: attachment; filename="kinan-backup-' . date('Y-m-d-His') . '.kinan"');
                 echo $json;
@@ -580,6 +653,19 @@ function invoicePaid(PDO $pdo, int $invoiceId): float {
 
 function formatIQD(float $amount): string {
     return number_format($amount, 0, '.', ',') . ' د.ع';
+}
+
+function auditLog(PDO $pdo, ?array $user, string $action, string $entity = '', string $entityId = '', string $details = ''): void {
+    $pdo->prepare('INSERT INTO audit_logs (user_id,username,action,entity,entity_id,details,ip_address) VALUES (?,?,?,?,?,?,?)')
+        ->execute([
+            $user['id'] ?? null,
+            $user['username'] ?? null,
+            $action,
+            $entity,
+            $entityId,
+            $details,
+            $_SERVER['REMOTE_ADDR'] ?? ''
+        ]);
 }
 
 function saveUploadedFile(string $fieldName, string $subfolder = 'resources'): ?string {
@@ -674,10 +760,12 @@ if ($page === 'login' && $error === '') {
                 <a class="<?= $page==='curriculum'?'active':'' ?>" href="?page=curriculum"><span>▣</span> المناهج والكتب والنماذج</a>
                 <a class="<?= $page==='correspondence'?'active':'' ?>" href="?page=correspondence"><span>✉</span> المراسلات الإدارية</a>
                 <a class="<?= $page==='office'?'active':'' ?>" href="?page=office"><span>⇄</span> Word وExcel والسجلات</a>
+                <a class="<?= $page==='security'?'active':'' ?>" href="?page=security"><span>◆</span> الأمان والحسابات</a>
             <?php endif ?>
             <?php if (canCounsel($user)): ?>
                 <a class="<?= $page==='counseling'?'active':'' ?>" href="?page=counseling"><span>♥</span> الإرشاد التربوي</a>
             <?php endif ?>
+            <a class="<?= $page==='password'?'active':'' ?>" href="?page=password"><span>🔒</span> كلمة المرور</a>
             <a class="<?= $page==='learning'?'active':'' ?>" href="?page=learning"><span>▶</span> المحاضرات والواجبات</a>
             <?php if ($user['role'] === 'ولي أمر'): ?>
                 <a class="<?= $page==='parent_portal'?'active':'' ?>" href="?page=parent_portal"><span>⌂</span> بوابة ولي الأمر</a>
@@ -703,7 +791,7 @@ if ($page === 'login' && $error === '') {
                     'classes'=>'الصفوف والشعب','subjects'=>'المواد الدراسية','attendance'=>'الحضور والغياب',
                     'grades'=>'سجل الدرجات','backup'=>'النسخ الاحتياطية','accounting'=>'المحاسبة والرسوم',
                     'parents'=>'أولياء الأمور والإشعارات','parent_portal'=>'بوابة ولي الأمر','notifications'=>'الإشعارات',
-                    'curriculum'=>'المناهج والكتب والنماذج','learning'=>'المحاضرات والواجبات','correspondence'=>'المراسلات الإدارية','office'=>'التداول مع Word وExcel','counseling'=>'الإرشاد التربوي والسلوك'
+                    'curriculum'=>'المناهج والكتب والنماذج','learning'=>'المحاضرات والواجبات','correspondence'=>'المراسلات الإدارية','office'=>'التداول مع Word وExcel','counseling'=>'الإرشاد التربوي والسلوك','password'=>'تغيير كلمة المرور','security'=>'الأمان والحسابات'
                ][$page] ?? 'كِنان') ?></h1>
             </div>
         </header>
@@ -1338,6 +1426,74 @@ if ($page === 'login' && $error === '') {
                 <?php endforeach ?>
                 <?php foreach($pdo->query('SELECT p.*,s.full_name FROM improvement_plans p JOIN students s ON s.id=p.student_id ORDER BY p.start_date DESC,p.id DESC LIMIT 30') as $row): ?>
                     <tr><td><?= e($row['full_name']) ?></td><td>خطة: <?= e($row['title']) ?></td><td><?= e($row['goals'].' '.$row['progress']) ?></td><td><?= e($row['status'].' — '.$row['review_date']) ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+            </div>
+        <?php elseif ($page === 'password'): ?>
+            <div class="panel">
+                <h2>تغيير كلمة المرور</h2>
+                <form method="post" class="form-grid">
+                    <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>">
+                    <input type="hidden" name="action" value="password_change">
+                    <label>كلمة المرور الحالية<input type="password" name="current_password" autocomplete="current-password" required></label>
+                    <label>كلمة المرور الجديدة<input type="password" name="new_password" minlength="10" autocomplete="new-password" required></label>
+                    <label>تأكيد كلمة المرور الجديدة<input type="password" name="confirm_password" minlength="10" autocomplete="new-password" required></label>
+                    <button class="btn primary">حفظ كلمة المرور</button>
+                </form>
+                <p class="muted">يفضل استخدام 10 أحرف على الأقل تجمع رقمًا وحرفًا ورمزًا ولا تستخدم كلمة مشابهة لاسم المستخدم.</p>
+            </div>
+        <?php elseif ($page === 'security' && canManage($user)): ?>
+            <div class="counseling-grid">
+                <div class="panel">
+                    <h2>إنشاء حساب جديد</h2>
+                    <form method="post" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>">
+                        <input type="hidden" name="action" value="user_create">
+                        <label>الاسم الكامل<input name="name" required></label>
+                        <label>اسم المستخدم<input name="username" autocomplete="username" required></label>
+                        <label>كلمة المرور المؤقتة<input type="password" name="password" minlength="10" required></label>
+                        <label>الدور<select name="role"><option>مدير</option><option>معاون</option><option>مدرس</option><option>محاسب</option><option>ولي أمر</option></select></label>
+                        <button class="btn primary">إنشاء الحساب</button>
+                    </form>
+                </div>
+                <div class="panel">
+                    <h2>إدارة الحسابات والقفل</h2>
+                    <div class="table-wrap"><table><thead><tr><th>الحساب</th><th>الدور</th><th>الحالة</th><th>محاولات فاشلة</th><th>الإجراء</th></tr></thead><tbody>
+                    <?php foreach($pdo->query('SELECT * FROM users ORDER BY id') as $row): ?>
+                        <tr><td><?= e($row['name'].' ('.$row['username'].')') ?></td><td><?= e($row['role']) ?></td><td><?= (int)$row['active']?'مفعل':'معطل' ?></td><td><?= (int)($row['failed_attempts'] ?? 0) ?></td><td>
+                            <?php if((int)$row['id'] !== (int)$user['id']): ?>
+                                <form method="post" class="inline-actions">
+                                    <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>">
+                                    <input type="hidden" name="action" value="user_status_save">
+                                    <input type="hidden" name="user_id" value="<?= $row['id'] ?>">
+                                    <?php if(!(int)$row['active']): ?><input type="hidden" name="active" value="1"><?php endif ?>
+                                    <button class="link-button"><?= (int)$row['active']?'تعطيل':'تفعيل' ?></button>
+                                </form>
+                                <form method="post" class="inline-actions">
+                                    <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>">
+                                    <input type="hidden" name="action" value="user_unlock">
+                                    <input type="hidden" name="user_id" value="<?= $row['id'] ?>">
+                                    <button class="link-button">فك القفل</button>
+                                </form>
+                            <?php endif ?>
+                        </td></tr>
+                    <?php endforeach ?>
+                    </tbody></table></div>
+                </div>
+            </div>
+            <div class="panel">
+                <h2>آخر عمليات التدقيق الحساسة</h2>
+                <div class="table-wrap"><table><thead><tr><th>المستخدم</th><th>العملية</th><th>الكيان</th><th>التفاصيل</th><th>الوقت</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 100') as $row): ?>
+                    <tr><td><?= e((string)$row['username']) ?></td><td><?= e($row['action']) ?></td><td><?= e($row['entity'].' '.$row['entity_id']) ?></td><td><?= e((string)$row['details']) ?></td><td><?= e($row['created_at']) ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+            </div>
+            <div class="panel">
+                <h2>محاولات تسجيل الدخول الأخيرة</h2>
+                <div class="table-wrap"><table><thead><tr><th>اسم المستخدم</th><th>عنوان الشبكة</th><th>النتيجة</th><th>الوقت</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT * FROM login_attempts ORDER BY id DESC LIMIT 100') as $row): ?>
+                    <tr><td><?= e($row['username']) ?></td><td><?= e((string)$row['ip_address']) ?></td><td><?= (int)$row['successful']?'نجح':'فشل' ?></td><td><?= e($row['attempted_at']) ?></td></tr>
                 <?php endforeach ?>
                 </tbody></table></div>
             </div>

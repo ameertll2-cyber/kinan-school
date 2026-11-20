@@ -335,6 +335,24 @@ function db(): PDO {
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(student_id,subject_id,academic_year,period_name,exam_round)
         );
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            action TEXT NOT NULL,
+            entity TEXT,
+            entity_id TEXT,
+            details TEXT,
+            ip_address TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            ip_address TEXT,
+            successful INTEGER NOT NULL DEFAULT 0,
+            attempted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
     ");
 
     foreach ([
@@ -349,12 +367,16 @@ function db(): PDO {
         "ALTER TABLE grades ADD COLUMN period_name TEXT NOT NULL DEFAULT 'الفصل الأول'",
         "ALTER TABLE grades ADD COLUMN exam_round TEXT NOT NULL DEFAULT 'الدور الأول'",
         "ALTER TABLE grades ADD COLUMN study_type TEXT NOT NULL DEFAULT 'صباحي نظامي'",
+        "ALTER TABLE users ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN locked_until TEXT",
+        "ALTER TABLE users ADD COLUMN password_changed_at TEXT",
         "ALTER TABLE staff ADD COLUMN specialization TEXT",
         "ALTER TABLE staff ADD COLUMN staff_number TEXT",
     ] as $migration) {
         $columnNames = [
             'term','assessment_type','created_by','birth_date','gender','enrollment_number',
-            'study_type','academic_year','period_name','exam_round','specialization','staff_number'
+            'study_type','academic_year','period_name','exam_round','specialization','staff_number',
+            'failed_attempts','locked_until','password_changed_at'
         ];
         $columns = '';
         foreach ($columnNames as $candidate) {
@@ -364,7 +386,8 @@ function db(): PDO {
             }
         }
         $table = str_contains($migration, 'ALTER TABLE grades') ? 'grades'
-            : (str_contains($migration, 'ALTER TABLE students') ? 'students' : 'staff');
+            : (str_contains($migration, 'ALTER TABLE students') ? 'students'
+            : (str_contains($migration, 'ALTER TABLE users') ? 'users' : 'staff'));
         $existingColumns = array_column($pdo->query("PRAGMA table_info($table)")->fetchAll(), 'name');
         if (!in_array($columns, $existingColumns, true)) {
             $pdo->exec($migration);
