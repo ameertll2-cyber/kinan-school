@@ -38,15 +38,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $user = requireLogin();
 
         $accountingActions = ['fee_type_save','invoice_save','payment_save','expense_save'];
+        $teacherActions = ['assignment_save','lecture_save'];
         if (!canManage($user) && $action !== 'attendance_save' && $action !== 'grade_save'
             && $action !== 'notification_read'
-            && !in_array($action, $accountingActions, true)) {
+            && !in_array($action, $accountingActions, true)
+            && !in_array($action, $teacherActions, true)) {
             $error = 'ليست لديك صلاحية تنفيذ هذا الإجراء';
         } elseif (in_array($action, $accountingActions, true) && !canAccounting($user)) {
             $error = 'ليست لديك صلاحية تنفيذ الإجراء المحاسبي';
         } elseif ($action === 'student_save') {
-            $pdo->prepare('INSERT INTO students (full_name,national_id,class_id,guardian_name,guardian_phone,address) VALUES (?,?,?,?,?,?)')
-                ->execute([trim((string)$_POST['full_name']), trim((string)$_POST['national_id']), (int)$_POST['class_id'], trim((string)$_POST['guardian_name']), trim((string)$_POST['guardian_phone']), trim((string)$_POST['address'])]);
+            $pdo->prepare('INSERT INTO students (full_name,national_id,class_id,guardian_name,guardian_phone,address,birth_date,gender,enrollment_number) VALUES (?,?,?,?,?,?,?,?,?)')
+                ->execute([trim((string)$_POST['full_name']), trim((string)$_POST['national_id']), (int)$_POST['class_id'], trim((string)$_POST['guardian_name']), trim((string)$_POST['guardian_phone']), trim((string)$_POST['address']), trim((string)$_POST['birth_date']), trim((string)$_POST['gender']), trim((string)$_POST['enrollment_number'])]);
             $message = 'تمت إضافة الطالب';
         } elseif ($action === 'staff_save') {
             $pdo->prepare('INSERT INTO staff (full_name,job_title,phone,email) VALUES (?,?,?,?)')
@@ -144,9 +146,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $message = 'تم حفظ الحضور';
         } elseif ($action === 'grade_save') {
-            $pdo->prepare('INSERT INTO grades (student_id,subject_id,type,score,max_score,date,note) VALUES (?,?,?,?,?,?,?)')
-                ->execute([(int)$_POST['student_id'], (int)$_POST['subject_id'], trim((string)$_POST['type']), (float)$_POST['score'], (float)$_POST['max_score'], (string)$_POST['date'], trim((string)$_POST['note'])]);
+            $score = (float)$_POST['score'];
+            $maxScore = (float)$_POST['max_score'];
+            if ($maxScore <= 0 || $score < 0 || $score > $maxScore) {
+                $error = 'الدرجة يجب أن تكون بين صفر والدرجة العظمى';
+            } else {
+            $pdo->prepare('INSERT INTO grades (student_id,subject_id,type,score,max_score,date,note,term,assessment_type,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)')
+                ->execute([(int)$_POST['student_id'], (int)$_POST['subject_id'], trim((string)$_POST['assessment_type']), $score, $maxScore, (string)$_POST['date'], trim((string)$_POST['note']), trim((string)$_POST['term']), trim((string)$_POST['assessment_type']), (int)$user['id']]);
             $message = 'تمت إضافة الدرجة';
+            }
         } elseif ($action === 'parent_link_save') {
             $parentUserId = (int)$_POST['parent_user_id'];
             $studentId = (int)$_POST['student_id'];
@@ -174,6 +182,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $notificationId = (int)$_POST['notification_id'];
             $pdo->prepare('INSERT OR IGNORE INTO notification_reads (notification_id,user_id) VALUES (?,?)')
                 ->execute([$notificationId, (int)$user['id']]);
+        } elseif ($action === 'curriculum_save') {
+            $pdo->prepare('INSERT INTO curricula (stage,grade_name,academic_year,subject_id,title,version_label,source_authority,status,created_by) VALUES (?,?,?,?,?,?,?,?,?)')
+                ->execute([trim((string)$_POST['stage']), trim((string)$_POST['grade_name']), trim((string)$_POST['academic_year']), (int)($_POST['subject_id'] ?: 0) ?: null, trim((string)$_POST['title']), trim((string)$_POST['version_label']), trim((string)$_POST['source_authority']) ?: 'وزارة التربية العراقية', trim((string)$_POST['status']), (int)$user['id']]);
+            $message = 'تمت إضافة المنهج الدراسي';
+        } elseif ($action === 'resource_save') {
+            try {
+                $path = saveUploadedFile('resource_file', 'resources');
+                $pdo->prepare('INSERT INTO learning_resources (title,resource_type,stage,grade_name,subject_id,academic_year,file_name,file_path,external_url,description,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+                    ->execute([
+                        trim((string)$_POST['title']), trim((string)$_POST['resource_type']),
+                        trim((string)$_POST['stage']), trim((string)$_POST['grade_name']),
+                        (int)($_POST['subject_id'] ?: 0) ?: null, trim((string)$_POST['academic_year']),
+                        $path ? basename($path) : null, $path, trim((string)$_POST['external_url']),
+                        trim((string)$_POST['description']), (int)$user['id']
+                    ]);
+                $message = 'تمت إضافة المورد التعليمي';
+            } catch (Throwable $e) {
+                $error = $e->getMessage();
+            }
+        } elseif ($action === 'assignment_save') {
+            try {
+                $path = saveUploadedFile('assignment_file', 'assignments');
+                $pdo->prepare('INSERT INTO assignments (title,subject_id,class_id,description,due_date,attachment_path,created_by) VALUES (?,?,?,?,?,?,?)')
+                    ->execute([trim((string)$_POST['title']), (int)$_POST['subject_id'], (int)($_POST['class_id'] ?: 0) ?: null, trim((string)$_POST['description']), trim((string)$_POST['due_date']), $path, (int)$user['id']]);
+                $message = 'تمت إضافة الواجب';
+            } catch (Throwable $e) {
+                $error = $e->getMessage();
+            }
+        } elseif ($action === 'lecture_save') {
+            try {
+                $path = saveUploadedFile('lecture_file', 'lectures');
+                $pdo->prepare('INSERT INTO lectures (title,subject_id,class_id,video_url,attachment_path,description,created_by) VALUES (?,?,?,?,?,?,?)')
+                    ->execute([trim((string)$_POST['title']), (int)($_POST['subject_id'] ?: 0) ?: null, (int)($_POST['class_id'] ?: 0) ?: null, trim((string)$_POST['video_url']), $path, trim((string)$_POST['description']), (int)$user['id']]);
+                $message = 'تمت إضافة المحاضرة';
+            } catch (Throwable $e) {
+                $error = $e->getMessage();
+            }
+        } elseif ($action === 'official_form_save') {
+            try {
+                $path = saveUploadedFile('form_file', 'forms');
+                $pdo->prepare('INSERT INTO official_forms (title,form_code,category,academic_year,file_path,description,created_by) VALUES (?,?,?,?,?,?,?)')
+                    ->execute([trim((string)$_POST['title']), trim((string)$_POST['form_code']), trim((string)$_POST['category']), trim((string)$_POST['academic_year']), $path, trim((string)$_POST['description']), (int)$user['id']]);
+                $message = 'تمت إضافة النموذج الإداري';
+            } catch (Throwable $e) {
+                $error = $e->getMessage();
+            }
+        } elseif ($action === 'correspondence_save') {
+            $reference = trim((string)$_POST['reference_number']);
+            if ($reference === '' || trim((string)$_POST['subject']) === '') {
+                $error = 'أدخل رقم المرجع وموضوع المراسلة';
+            } else {
+                try {
+                    $path = saveUploadedFile('correspondence_file', 'correspondence');
+                    $pdo->prepare('INSERT INTO correspondence (correspondence_type,reference_number,recipient,subject,body,correspondence_date,attachment_path,status,created_by) VALUES (?,?,?,?,?,?,?,?,?)')
+                        ->execute([trim((string)$_POST['correspondence_type']), $reference, trim((string)$_POST['recipient']), trim((string)$_POST['subject']), trim((string)$_POST['body']), trim((string)$_POST['correspondence_date']), $path, trim((string)$_POST['status']), (int)$user['id']]);
+                    $message = 'تمت إضافة المراسلة';
+                } catch (Throwable $e) {
+                    $error = $e->getMessage();
+                }
+            }
         } elseif ($action === 'backup_export') {
             $password = (string)$_POST['backup_password'];
             if (strlen($password) < 8) {
@@ -245,6 +313,37 @@ function formatIQD(float $amount): string {
     return number_format($amount, 0, '.', ',') . ' د.ع';
 }
 
+function saveUploadedFile(string $fieldName, string $subfolder = 'resources'): ?string {
+    if (!isset($_FILES[$fieldName]) || ($_FILES[$fieldName]['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+        return null;
+    }
+    if ($_FILES[$fieldName]['error'] !== UPLOAD_ERR_OK) {
+        throw new RuntimeException('تعذر رفع الملف');
+    }
+    $allowed = [
+        'pdf'=>'pdf','doc'=>'doc','docx'=>'docx','xls'=>'xls','xlsx'=>'xlsx',
+        'ppt'=>'ppt','pptx'=>'pptx','jpg'=>'jpg','jpeg'=>'jpeg','png'=>'png','mp4'=>'mp4'
+    ];
+    $original = (string)$_FILES[$fieldName]['name'];
+    $ext = strtolower(pathinfo($original, PATHINFO_EXTENSION));
+    if (!isset($allowed[$ext])) {
+        throw new RuntimeException('امتداد الملف غير مسموح');
+    }
+    if ((int)$_FILES[$fieldName]['size'] > 25 * 1024 * 1024) {
+        throw new RuntimeException('حجم الملف أكبر من 25 ميغابايت');
+    }
+    $root = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . $subfolder;
+    if (!is_dir($root)) {
+        mkdir($root, 0775, true);
+    }
+    $safeName = date('YmdHis') . '-' . bin2hex(random_bytes(6)) . '.' . $allowed[$ext];
+    $destination = $root . DIRECTORY_SEPARATOR . $safeName;
+    if (!move_uploaded_file($_FILES[$fieldName]['tmp_name'], $destination)) {
+        throw new RuntimeException('تعذر حفظ الملف المرفوع');
+    }
+    return 'uploads/' . $subfolder . '/' . $safeName;
+}
+
 $title = 'كِنان';
 if ($page === 'login' && $error === '') {
     $error = isset($_GET['required']) ? 'سجل الدخول للمتابعة' : '';
@@ -303,7 +402,10 @@ if ($page === 'login' && $error === '') {
             <?php endif ?>
             <?php if (canManage($user)): ?>
                 <a class="<?= $page==='parents'?'active':'' ?>" href="?page=parents"><span>♙</span> أولياء الأمور والإشعارات</a>
+                <a class="<?= $page==='curriculum'?'active':'' ?>" href="?page=curriculum"><span>▣</span> المناهج والكتب والنماذج</a>
+                <a class="<?= $page==='correspondence'?'active':'' ?>" href="?page=correspondence"><span>✉</span> المراسلات الإدارية</a>
             <?php endif ?>
+            <a class="<?= $page==='learning'?'active':'' ?>" href="?page=learning"><span>▶</span> المحاضرات والواجبات</a>
             <?php if ($user['role'] === 'ولي أمر'): ?>
                 <a class="<?= $page==='parent_portal'?'active':'' ?>" href="?page=parent_portal"><span>⌂</span> بوابة ولي الأمر</a>
                 <a class="<?= $page==='notifications'?'active':'' ?>" href="?page=notifications"><span>!</span> الإشعارات</a>
@@ -327,7 +429,8 @@ if ($page === 'login' && $error === '') {
                     'dashboard'=>'لوحة التحكم','students'=>'إدارة الطلبة','staff'=>'الكادر التدريسي',
                     'classes'=>'الصفوف والشعب','subjects'=>'المواد الدراسية','attendance'=>'الحضور والغياب',
                     'grades'=>'سجل الدرجات','backup'=>'النسخ الاحتياطية','accounting'=>'المحاسبة والرسوم',
-                    'parents'=>'أولياء الأمور والإشعارات','parent_portal'=>'بوابة ولي الأمر','notifications'=>'الإشعارات'
+                    'parents'=>'أولياء الأمور والإشعارات','parent_portal'=>'بوابة ولي الأمر','notifications'=>'الإشعارات',
+                    'curriculum'=>'المناهج والكتب والنماذج','learning'=>'المحاضرات والواجبات','correspondence'=>'المراسلات الإدارية'
                ][$page] ?? 'كِنان') ?></h1>
             </div>
         </header>
@@ -360,6 +463,9 @@ if ($page === 'login' && $error === '') {
                         <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="student_save">
                         <label>اسم الطالب الكامل<input name="full_name" required></label>
                         <label>رقم الهوية<input name="national_id"></label>
+                        <label>رقم القيد المدرسي<input name="enrollment_number"></label>
+                        <label>تاريخ الميلاد<input name="birth_date" type="date"></label>
+                        <label>الجنس<select name="gender"><option value="">غير محدد</option><option>ذكر</option><option>أنثى</option></select></label>
                         <label>الصف<select name="class_id"><?php foreach($pdo->query('SELECT * FROM classes') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name'].' - شعب '.$row['section']) ?></option><?php endforeach ?></select></label>
                         <label>اسم ولي الأمر<input name="guardian_name"></label>
                         <label>هاتف ولي الأمر<input name="guardian_phone"></label>
@@ -389,7 +495,7 @@ if ($page === 'login' && $error === '') {
             <div class="panel">
                 <details><summary>إضافة صف وشعبة</summary><form method="post" class="form-grid">
                     <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="class_save">
-                    <label>اسم الصف<input name="name" required></label><label>المرحلة<select name="stage"><option>ابتدائي</option><option>متوسط</option><option>إعدادي</option></select></label>
+                    <label>اسم الصف<input name="name" required></label>                    <label>المرحلة<select name="stage"><option>روضة</option><option>ابتدائي</option><option>متوسط</option><option>إعدادي</option></select></label>
                     <label>الشعبة<input name="section" value="أ" required></label><label>السنة الدراسية<input name="academic_year" value="2026-2027" required></label>
                     <button class="btn primary">حفظ الصف</button>
                 </form></details>
@@ -428,12 +534,14 @@ if ($page === 'login' && $error === '') {
                     <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="grade_save">
                     <label>الطالب<select name="student_id"><?php foreach($pdo->query('SELECT * FROM students WHERE active=1') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['full_name']) ?></option><?php endforeach ?></select></label>
                     <label>المادة<select name="subject_id"><?php foreach($pdo->query('SELECT * FROM subjects') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name']) ?></option><?php endforeach ?></select></label>
-                    <label>نوع التقييم<input name="type" value="شهري" required></label><label>الدرجة<input name="score" type="number" step="0.01" required></label>
-                    <label>الدرجة العظمى<input name="max_score" type="number" step="0.01" value="100"></label><label>التاريخ<input name="date" type="date" value="<?= date('Y-m-d') ?>"></label>
+                    <label>الفصل الدراسي<select name="term"><option>الفصل الأول</option><option>الفصل الثاني</option><option>امتحان شامل</option></select></label>
+                    <label>نوع التقييم<select name="assessment_type"><option>شهري</option><option>أسبوعي</option><option>عملي</option><option>تحريري</option><option>نصف السنة</option><option>امتحان نهاية الفصل</option><option>امتحان الكورس</option></select></label>
+                    <label>الدرجة<input name="score" type="number" step="0.01" min="0" required></label>
+                    <label>الدرجة العظمى<input name="max_score" type="number" step="0.01" min="1" value="100"></label><label>التاريخ<input name="date" type="date" value="<?= date('Y-m-d') ?>"></label>
                     <label>ملاحظة<input name="note"></label><button class="btn primary">حفظ الدرجة</button>
                 </form></details>
-                <div class="table-wrap"><table><thead><tr><th>الطالب</th><th>المادة</th><th>التقييم</th><th>الدرجة</th><th>التاريخ</th></tr></thead><tbody>
-                <?php foreach($pdo->query('SELECT g.*,s.full_name student_name,j.name subject_name FROM grades g JOIN students s ON s.id=g.student_id JOIN subjects j ON j.id=g.subject_id ORDER BY g.id DESC') as $row): ?><tr><td><?= e($row['student_name']) ?></td><td><?= e($row['subject_name']) ?></td><td><?= e($row['type']) ?></td><td><?= e((string)$row['score'].' / '.(string)$row['max_score']) ?></td><td><?= e($row['date']) ?></td></tr><?php endforeach ?>
+                <div class="table-wrap"><table><thead><tr><th>الطالب</th><th>المادة</th><th>الفصل والتقييم</th><th>الدرجة</th><th>التاريخ</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT g.*,s.full_name student_name,j.name subject_name FROM grades g JOIN students s ON s.id=g.student_id JOIN subjects j ON j.id=g.subject_id ORDER BY g.id DESC') as $row): ?><tr><td><?= e($row['student_name']) ?></td><td><?= e($row['subject_name']) ?></td><td><?= e((string)($row['term'] ?? '').' — '.$row['type']) ?></td><td><?= e((string)$row['score'].' / '.(string)$row['max_score']) ?></td><td><?= e($row['date']) ?></td></tr><?php endforeach ?>
                 </tbody></table></div>
             </div>
         <?php elseif ($page === 'accounting' && canAccounting($user)): ?>
@@ -675,6 +783,139 @@ if ($page === 'login' && $error === '') {
                     </article>
                 <?php endforeach ?>
                 <?php if (!$found): ?><p class="muted">لا توجد إشعارات جديدة.</p><?php endif ?>
+            </div>
+        <?php elseif ($page === 'curriculum' && canManage($user)): ?>
+            <div class="panel">
+                <details open>
+                    <summary>ربط المنهج بالدراسة الرسمية</summary>
+                    <form method="post" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="curriculum_save">
+                        <label>المرحلة العربية<select name="stage"><option>الروضة</option><option>ابتدائي</option><option>متوسط</option><option>إعدادي</option></select></label>
+                        <label>الصف الدراسي<select name="grade_name"><option>الأول ابتدائي</option><option>الثاني ابتدائي</option><option>الثالث ابتدائي</option><option>الرابع ابتدائي</option><option>الخامس ابتدائي</option><option>السادس ابتدائي</option><option>الأول متوسط</option><option>الثاني متوسط</option><option>الثالث متوسط</option><option>الرابع إعدادي</option><option>الخامس إعدادي</option><option>السادس إعدادي</option></select></label>
+                        <label>السنة الدراسية<input name="academic_year" value="2026-2027" required></label>
+                        <label>المادة<select name="subject_id"><option value="">عام</option><?php foreach($pdo->query('SELECT * FROM subjects ORDER BY name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name']) ?></option><?php endforeach ?></select></label>
+                        <label>عنوان المنهج<input name="title" required></label>
+                        <label>الإصدار أو المجلد<input name="version_label"></label>
+                        <label>الجهة المعتمدة<input name="source_authority" value="وزارة التربية العراقية"></label>
+                        <label>الحالة<select name="status"><option>معتمد</option><option>قيد المراجعة</option><option>مؤرشف</option></select></label>
+                        <button class="btn primary">حفظ المنهج</button>
+                    </form>
+                </details>
+                <div class="table-wrap"><table><thead><tr><th>المرحلة والصف</th><th>المادة</th><th>المناهج المعتمدة</th><th>السنة</th><th>الحالة</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT c.*,j.name subject_name FROM curricula c LEFT JOIN subjects j ON j.id=c.subject_id ORDER BY c.id DESC') as $row): ?>
+                    <tr><td><?= e($row['stage'].' / '.$row['grade_name']) ?></td><td><?= e((string)$row['subject_name']) ?></td><td><?= e($row['title'].' — '.$row['version_label']) ?></td><td><?= e($row['academic_year']) ?></td><td><?= e($row['status']) ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+            </div>
+            <div class="panel">
+                <details open>
+                    <summary>إضافة كتاب رسمي أو مورد تعليمي</summary>
+                    <form method="post" enctype="multipart/form-data" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="resource_save">
+                        <label>عنوان المورد<input name="title" required></label>
+                        <label>نوع المورد<select name="resource_type"><option>كتاب رسمي</option><option>محاضرة</option><option>واجب</option><option>نموذج</option><option>مراسلة</option><option>ملف إداري</option></select></label>
+                        <label>المرحلة<select name="stage"><option value="">الكل</option><option>ابتدائي</option><option>متوسط</option><option>إعدادي</option></select></label>
+                        <label>الصف<input name="grade_name"></label>
+                        <label>المادة<select name="subject_id"><option value="">عام</option><?php foreach($pdo->query('SELECT * FROM subjects ORDER BY name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name']) ?></option><?php endforeach ?></select></label>
+                        <label>السنة الدراسية<input name="academic_year" value="2026-2027"></label>
+                        <label>رابط خارجي<input name="external_url" type="url" placeholder="https://"></label>
+                        <label>الملف الرسمي<input type="file" name="resource_file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png"></label>
+                        <label>الوصف<textarea name="description" rows="3"></textarea></label>
+                        <button class="btn primary">حفظ المورد</button>
+                    </form>
+                </details>
+                <div class="table-wrap"><table><thead><tr><th>المورد</th><th>النوع</th><th>المرحلة والصف</th><th>المادة</th><th>الملف</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT r.*,j.name subject_name FROM learning_resources r LEFT JOIN subjects j ON j.id=r.subject_id ORDER BY r.id DESC') as $row): ?>
+                    <tr><td><?= e($row['title']) ?><br><small><?= e((string)$row['description']) ?></small></td><td><?= e($row['resource_type']) ?></td><td><?= e(trim($row['stage'].' '.$row['grade_name'])) ?></td><td><?= e((string)$row['subject_name']) ?></td><td><?php if($row['file_path']): ?><a href="<?= e($row['file_path']) ?>" target="_blank">فتح الملف</a><?php elseif($row['external_url']): ?><a href="<?= e($row['external_url']) ?>" target="_blank">فتح الرابط</a><?php endif ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+            </div>
+            <div class="panel">
+                <details open>
+                    <summary>إضافة نموذج رسمي</summary>
+                    <form method="post" enctype="multipart/form-data" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="official_form_save">
+                        <label>اسم النموذج<input name="title" required></label>
+                        <label>رمز النموذج<input name="form_code"></label>
+                        <label>الفئة<select name="category"><option>طلب رسمي</option><option>بيان طالب</option><option>محضر</option><option>كشف درجات</option><option>شهادة</option><option>مراسلة</option><option>إشراف تربوي</option></select></label>
+                        <label>السنة الدراسية<input name="academic_year" value="2026-2027"></label>
+                        <label>الملف<input type="file" name="form_file" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"></label>
+                        <label>الوصف<textarea name="description" rows="3"></textarea></label>
+                        <button class="btn primary">حفظ النموذج</button>
+                    </form>
+                </details>
+                <div class="table-wrap"><table><thead><tr><th>النموذج</th><th>الرمز</th><th>الفئة</th><th>السنة</th><th>الملف</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT * FROM official_forms ORDER BY id DESC') as $row): ?>
+                    <tr><td><?= e($row['title']) ?></td><td><?= e((string)$row['form_code']) ?></td><td><?= e($row['category']) ?></td><td><?= e((string)$row['academic_year']) ?></td><td><?php if($row['file_path']): ?><a href="<?= e($row['file_path']) ?>" target="_blank">فتح</a><?php endif ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+            </div>
+        <?php elseif ($page === 'learning'): ?>
+            <?php if (canManage($user) || $user['role'] === 'مدرس'): ?>
+                <div class="panel">
+                    <details open>
+                        <summary>إضافة واجب أو نشاط صفّي</summary>
+                        <form method="post" enctype="multipart/form-data" class="form-grid">
+                            <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="assignment_save">
+                            <label>عنوان الواجب<input name="title" required></label>
+                            <label>المادة<select name="subject_id" required><?php foreach($pdo->query('SELECT * FROM subjects ORDER BY name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name']) ?></option><?php endforeach ?></select></label>
+                            <label>الصف<select name="class_id"><option value="">جميع صفوف المادة</option><?php foreach($pdo->query('SELECT * FROM classes ORDER BY id') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name'].' - '.$row['section']) ?></option><?php endforeach ?></select></label>
+                            <label>موعد التسليم<input name="due_date" type="date" value="<?= date('Y-m-d') ?>"></label>
+                            <label>الملحق<input type="file" name="assignment_file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png"></label>
+                            <label>التفاصيل<textarea name="description" rows="3"></textarea></label>
+                            <button class="btn primary">نشر الواجب</button>
+                        </form>
+                    </details>
+                    <details open>
+                        <summary>ربط محاضرة مسجلة</summary>
+                        <form method="post" enctype="multipart/form-data" class="form-grid">
+                            <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="lecture_save">
+                            <label>عنوان المحاضرة<input name="title" required></label>
+                            <label>المادة<select name="subject_id"><option value="">عام</option><?php foreach($pdo->query('SELECT * FROM subjects ORDER BY name') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name']) ?></option><?php endforeach ?></select></label>
+                            <label>الصف<select name="class_id"><option value="">عام</option><?php foreach($pdo->query('SELECT * FROM classes ORDER BY id') as $row): ?><option value="<?= $row['id'] ?>"><?= e($row['name'].' - '.$row['section']) ?></option><?php endforeach ?></select></label>
+                            <label>رابط الفيديو<input name="video_url" type="url" placeholder="https://"></label>
+                            <label>ملف المحاضرة<input type="file" name="lecture_file" accept=".pdf,.doc,.docx,.ppt,.pptx,.mp4,.jpg,.jpeg,.png"></label>
+                            <label>الوصف<textarea name="description" rows="3"></textarea></label>
+                            <button class="btn primary">حفظ المحاضرة</button>
+                        </form>
+                    </details>
+                </div>
+            <?php endif ?>
+            <div class="panel">
+                <h2>المحاضرات والواجبات</h2>
+                <div class="table-wrap"><table><thead><tr><th>الواجب</th><th>المادة والصف</th><th>التسليم</th><th>الملف</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT a.*,j.name subject_name,c.name class_name,c.section FROM assignments a JOIN subjects j ON j.id=a.subject_id LEFT JOIN classes c ON c.id=a.class_id ORDER BY a.id DESC') as $row): ?>
+                    <tr><td><?= e($row['title']) ?><br><small><?= e((string)$row['description']) ?></small></td><td><?= e($row['subject_name'].' '.($row['class_name']?'- '.$row['class_name'].' '.$row['section']:'')) ?></td><td><?= e((string)$row['due_date']) ?></td><td><?php if($row['attachment_path']): ?><a href="<?= e($row['attachment_path']) ?>" target="_blank">فتح</a><?php endif ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+                <div class="table-wrap"><table><thead><tr><th>المحاضرة</th><th>الوصف</th><th>المادة والصف</th><th>الرابط</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT l.*,j.name subject_name,c.name class_name,c.section FROM lectures l LEFT JOIN subjects j ON j.id=l.subject_id LEFT JOIN classes c ON c.id=l.class_id ORDER BY l.id DESC') as $row): ?>
+                    <tr><td><?= e($row['title']) ?></td><td><?= e((string)$row['description']) ?></td><td><?= e(trim($row['subject_name'].' '.$row['class_name'].' '.$row['section'])) ?></td><td><?php if($row['video_url']): ?><a href="<?= e($row['video_url']) ?>" target="_blank">مشاهدة</a><?php elseif($row['attachment_path']): ?><a href="<?= e($row['attachment_path']) ?>" target="_blank">فتح الملف</a><?php endif ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
+            </div>
+        <?php elseif ($page === 'correspondence' && canManage($user)): ?>
+            <div class="panel">
+                <details open>
+                    <summary>إضافة وثيقة صادر أو وارد</summary>
+                    <form method="post" enctype="multipart/form-data" class="form-grid">
+                        <input type="hidden" name="csrf" value="<?= e(csrfToken()) ?>"><input type="hidden" name="action" value="correspondence_save">
+                        <label>نوع المراسلة<select name="correspondence_type"><option>صادر</option><option>وارد</option></select></label>
+                        <label>رقم الوارد أو الصادر<input name="reference_number" required></label>
+                        <label>الجهة المستلمة أو المرسلة<input name="recipient"></label>
+                        <label>تاريخ المراسلة<input name="correspondence_date" type="date" value="<?= date('Y-m-d') ?>"></label>
+                        <label>الموضوع<input name="subject" required></label>
+                        <label>الحالة<select name="status"><option>مسودة</option><option>مرسل</option><option>مستلم</option><option>مؤرشف</option></select></label>
+                        <label>المرفق<input type="file" name="correspondence_file" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"></label>
+                        <label>نص المراسلة<textarea name="body" rows="5"></textarea></label>
+                        <button class="btn primary">حفظ المراسلة</button>
+                    </form>
+                </details>
+                <div class="table-wrap"><table><thead><tr><th>النوع والرقم</th><th>الموضوع والجهة</th><th>التاريخ</th><th>الحالة</th><th>المرفق</th></tr></thead><tbody>
+                <?php foreach($pdo->query('SELECT * FROM correspondence ORDER BY correspondence_date DESC,id DESC') as $row): ?>
+                    <tr><td><?= e($row['correspondence_type'].' / '.$row['reference_number']) ?></td><td><?= e($row['subject'].' — '.$row['recipient']) ?></td><td><?= e($row['correspondence_date']) ?></td><td><?= e($row['status']) ?></td><td><?php if($row['attachment_path']): ?><a href="<?= e($row['attachment_path']) ?>" target="_blank">فتح</a><?php endif ?></td></tr>
+                <?php endforeach ?>
+                </tbody></table></div>
             </div>
         <?php elseif ($page === 'backup' && canManage($user)): ?>
             <div class="backup-grid">

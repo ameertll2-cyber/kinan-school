@@ -158,7 +158,107 @@ function db(): PDO {
             read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(notification_id, user_id)
         );
+        CREATE TABLE IF NOT EXISTS curricula (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stage TEXT NOT NULL,
+            grade_name TEXT NOT NULL,
+            academic_year TEXT NOT NULL,
+            subject_id INTEGER,
+            title TEXT NOT NULL,
+            version_label TEXT,
+            source_authority TEXT DEFAULT 'وزارة التربية العراقية',
+            status TEXT NOT NULL DEFAULT 'معتمد',
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS learning_resources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            resource_type TEXT NOT NULL CHECK(resource_type IN ('كتاب رسمي','محاضرة','واجب','نموذج','مراسلة','ملف إداري')),
+            stage TEXT,
+            grade_name TEXT,
+            subject_id INTEGER,
+            academic_year TEXT,
+            file_name TEXT,
+            file_path TEXT,
+            external_url TEXT,
+            description TEXT,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            subject_id INTEGER NOT NULL,
+            class_id INTEGER,
+            description TEXT,
+            due_date TEXT,
+            attachment_path TEXT,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS lectures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            subject_id INTEGER,
+            class_id INTEGER,
+            video_url TEXT,
+            attachment_path TEXT,
+            description TEXT,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS official_forms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            form_code TEXT,
+            category TEXT NOT NULL,
+            academic_year TEXT,
+            file_path TEXT,
+            description TEXT,
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS correspondence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            correspondence_type TEXT NOT NULL CHECK(correspondence_type IN ('صادر','وارد')),
+            reference_number TEXT NOT NULL UNIQUE,
+            recipient TEXT,
+            subject TEXT NOT NULL,
+            body TEXT,
+            correspondence_date TEXT NOT NULL,
+            attachment_path TEXT,
+            status TEXT NOT NULL DEFAULT 'مسودة',
+            created_by INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
     ");
+
+    foreach ([
+        "ALTER TABLE grades ADD COLUMN term TEXT NOT NULL DEFAULT 'الفصل الأول'",
+        "ALTER TABLE grades ADD COLUMN assessment_type TEXT NOT NULL DEFAULT 'شهري'",
+        "ALTER TABLE grades ADD COLUMN created_by INTEGER",
+        "ALTER TABLE students ADD COLUMN birth_date TEXT",
+        "ALTER TABLE students ADD COLUMN gender TEXT",
+        "ALTER TABLE students ADD COLUMN enrollment_number TEXT",
+        "ALTER TABLE staff ADD COLUMN specialization TEXT",
+        "ALTER TABLE staff ADD COLUMN staff_number TEXT",
+    ] as $migration) {
+        $columns = $migration === "ALTER TABLE grades ADD COLUMN term TEXT NOT NULL DEFAULT 'الفصل الأول'"
+            ? 'term'
+            : (str_contains($migration, 'assessment_type') ? 'assessment_type'
+                : (str_contains($migration, 'created_by') ? 'created_by'
+                    : (str_contains($migration, 'birth_date') ? 'birth_date'
+                        : (str_contains($migration, 'gender') ? 'gender'
+                            : (str_contains($migration, 'enrollment_number') ? 'enrollment_number'
+                                : (str_contains($migration, 'specialization') ? 'specialization' : 'staff_number'))))));
+        $table = str_contains($migration, 'ALTER TABLE grades') ? 'grades'
+            : (str_contains($migration, 'ALTER TABLE students') ? 'students' : 'staff');
+        $existingColumns = array_column($pdo->query("PRAGMA table_info($table)")->fetchAll(), 'name');
+        if (!in_array($columns, $existingColumns, true)) {
+            $pdo->exec($migration);
+        }
+    }
 
     seedDemoData($pdo);
     return $pdo;
@@ -233,6 +333,14 @@ function seedDemoData(PDO $pdo): void {
     if ($count === 0) {
         $pdo->exec("INSERT INTO notifications (title,body,audience,created_by) VALUES
             ('مرحبا بكم في بوابة ولي الأمر','يمكنكم متابعة الحضور والغياب والإشعارات الخاصة بالطالب المرتبط بحسابكم.','ولي أمر',1)");
+    }
+
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM curricula")->fetchColumn();
+    if ($count === 0) {
+        $pdo->exec("INSERT INTO curricula (stage,grade_name,academic_year,subject_id,title,version_label,source_authority,status,created_by) VALUES
+            ('ابتدائي','الصف الخامس','2026-2027',1,'المنهج الرسمي للغة العربية','نسخة إلكترونية مرجعية','وزارة التربية العراقية','معتمد',1),
+            ('ابتدائي','الصف الخامس','2026-2027',2,'المنهج الرسمي للرياضيات','نسخة إلكترونية مرجعية','وزارة التربية العراقية','معتمد',1),
+            ('متوسط','الصف الأول متوسط','2026-2027',3,'المنهج الرسمي للعلوم','نسخة إلكترونية مرجعية','وزارة التربية العراقية','معتمد',1)");
     }
 
     $count = (int)$pdo->query("SELECT COUNT(*) FROM invoices")->fetchColumn();
